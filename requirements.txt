@@ -1,0 +1,28 @@
+# Python dependencies for Feishu RPA Commerce Agent
+
+# Core dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+tortoise-orm==0.20.0
+psycopg2-binary==2.9.9
+redis==5.0.1
+celery==5.3.4
+langgraph==0.1.0
+langchain==0.1.0
+pymilvus==2.3.5
+requests==2.31.0
+python-dotenv==1.0.0
+
+# RPA dependencies
+rpaframework==25.0.0
+selenium==4.15.2
+
+# Feishu dependencies
+feishu-sdk==0.1.0
+
+# Development dependencies
+pytest==7.4.3
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.5.0

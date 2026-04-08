@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_URL=postgresql://admin:password@db:5432/example_db
+      - REDIS_URL=redis://redis:6379/0
+      - MILVUS_HOST=milvus
+      - MILVUS_PORT=19530
+    depends_on:
+      - db
+      - redis
+      - milvus
+    volumes:
+      - .:/app
+
+  db:
+    image: postgres:14
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=example_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  milvus:
+    image: milvusdb/milvus:v2.3.5
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    environment:
+      - METADATA_STORAGE_URI=sqlite:///meta.db
+
+volumes:
+  postgres_data:
+  redis_data:
+  milvus_data:
