@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
     FEISHU_BOT_NAME: str = "commerce-agent-bot"
+    # 群聊 @ 机器人判定：im.message.receive_v1 的 mentions 为 mention_event（仅 key/id/name/tenant_key），
+    # 需与 mentions[].id.open_id 比对；请在开放平台「我的应用」或相关接口获取本应用机器人的 open_id。
+    FEISHU_BOT_OPEN_ID: str = ""
+
+    # Feishu Bitable (multidimensional table) — one-way write, optional
+    ENABLE_FEISHU_BITABLE_WRITE: bool = False
+    FEISHU_BITABLE_APP_TOKEN: str = ""
+    FEISHU_BITABLE_TABLE_ID: str = ""
 
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"

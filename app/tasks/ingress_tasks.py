@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.db.models import TaskRecord
 from app.graph.builder import graph as lang_graph
 from app.services.feishu.client import FeishuClient
+from app.services.feishu.bitable_write import try_write_query_sku_bitable
 from app.utils.task_logger import log_step
 from app.core.time import get_shanghai_now
 
@@ -121,6 +122,21 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
             except Exception as e:
                 logger.error("=== FEISHU RESULT MESSAGE FAILED === task_id=%s, message_id=%s, error=%s, traceback=%s", 
                             task_id, source_message_id, str(e), traceback.format_exc())
+
+        # Bitable one-way write after IM reply (failures do not affect user-visible result)
+        try:
+            db.refresh(task_record)
+            try_write_query_sku_bitable(
+                task_id=task_id,
+                graph_result=result,
+                intent_text=task_record.intent_text or "",
+            )
+        except Exception as bitable_exc:
+            logger.warning(
+                "Bitable write wrapper failed (ignored): task_id=%s err=%s",
+                task_id,
+                bitable_exc,
+            )
 
         logger.info("=== CELERY TASK COMPLETED === task_id=%s, status=%s", task_id, task_record.status)
         return {"status": "success", "task_id": task_id, "result": task_record.result_summary}

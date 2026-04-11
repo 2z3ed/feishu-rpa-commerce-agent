@@ -4,10 +4,50 @@ import json
 import re
 
 import lark_oapi as lark
-from lark_oapi import model
 
 from app.core.logging import logger
 from app.core.config import settings
+
+
+def _mention_event_to_dict(mention: object) -> dict:
+    """Serialize im.message.receive_v1 的 mention_event（与发消息 API 的 Mention 不同，无 mentioned_type/bot_info）。"""
+    if mention is None:
+        return {}
+    if isinstance(mention, dict):
+        return {
+            "key": mention.get("key"),
+            "id": mention.get("id"),
+            "name": mention.get("name"),
+            "tenant_key": mention.get("tenant_key"),
+        }
+    mid = getattr(mention, "id", None)
+    id_part: dict | None = None
+    if mid is not None:
+        id_part = {
+            "open_id": getattr(mid, "open_id", None),
+            "union_id": getattr(mid, "union_id", None),
+            "user_id": getattr(mid, "user_id", None),
+        }
+    return {
+        "key": getattr(mention, "key", None),
+        "id": id_part,
+        "name": getattr(mention, "name", None),
+        "tenant_key": getattr(mention, "tenant_key", None),
+    }
+
+
+def _mention_open_id(mention: object) -> str:
+    if mention is None:
+        return ""
+    if isinstance(mention, dict):
+        uid = mention.get("id")
+        if isinstance(uid, dict):
+            return str(uid.get("open_id") or "").strip()
+        return ""
+    mid = getattr(mention, "id", None)
+    if mid is None:
+        return ""
+    return str(getattr(mid, "open_id", None) or "").strip()
 
 
 @dataclass
@@ -71,57 +111,44 @@ def parse_p2_im_message_receive_v1(event: lark.im.v1.P2ImMessageReceiveV1) -> Op
             text = content_raw
         create_time = getattr(msg, 'create_time', '') or ""
         
-        # ========== 群聊过滤：必须@机器人（双保险判断） ==========
+        # ========== 群聊：仅处理 @ 本应用机器人（im.message.receive_v1 的 mention_event） ==========
+        # 官方事件体字段见：https://open.feishu.cn/document/server-docs/im-v1/message/events/receive
+        # mentions 元素为 mention_event：key、id(user_id)、name、tenant_key；没有 mentioned_type / bot_info。
+        # 判定方式：mentions[].id.open_id 与 FEISHU_BOT_OPEN_ID 一致即为 @ 到当前机器人。
         if chat_type == "group":
             logger.info("Group message detected: message_id=%s, chat_id=%s", message_id, chat_id)
-            
-            bot_mentioned = False
-            
-            # 条件 A: 检查 mentions 中是否存在当前机器人
-            mentions = getattr(msg, 'mentions', None)
-            if mentions:
-                for mention in mentions:
-                    mentioned_type = None
-                    bot_app_id = None
-                    
-                    # 访问 mentioned_type
-                    if hasattr(mention, 'mentioned_type'):
-                        mentioned_type = getattr(mention, 'mentioned_type', '')
-                    elif isinstance(mention, dict):
-                        mentioned_type = mention.get('mentioned_type', '')
-                    
-                    # 访问 bot_info.app_id
-                    if mentioned_type == "bot":
-                        bot_info = None
-                        if hasattr(mention, 'bot_info'):
-                            bot_info = getattr(mention, 'bot_info', None)
-                        elif isinstance(mention, dict):
-                            bot_info = mention.get('bot_info', {})
-                        
-                        if bot_info:
-                            if hasattr(bot_info, 'app_id'):
-                                bot_app_id = getattr(bot_info, 'app_id', '')
-                            elif isinstance(bot_info, dict):
-                                bot_app_id = bot_info.get('app_id', '')
-                            
-                            if bot_app_id == settings.FEISHU_APP_ID:
-                                bot_mentioned = True
-                                logger.info("Bot mentioned detected by mentions: message_id=%s, chat_id=%s", message_id, chat_id)
-                                break
-            
-            # 条件 B: 文本前缀 fallback - 检查是否有@_user_1 等占位符
-            if not bot_mentioned and text:
-                if re.match(r'^@_user_\d+', text):
-                    bot_mentioned = True
-                    logger.info("Bot mentioned detected by text prefix fallback: message_id=%s, chat_id=%s", message_id, chat_id)
-            
-            # 如果两个条件都不满足，直接 skip
-            if not bot_mentioned:
-                logger.info("Skip group message: bot not mentioned, message_id=%s, chat_id=%s", message_id, chat_id)
+
+            mentions = getattr(msg, "mentions", None) or []
+            mentions_payload = [_mention_event_to_dict(m) for m in mentions]
+            logger.info(
+                "Group mentions raw (receive_v1 mention_event[]): %s",
+                json.dumps(mentions_payload, ensure_ascii=False),
+            )
+
+            bot_open_expected = (settings.FEISHU_BOT_OPEN_ID or "").strip()
+            if not bot_open_expected:
+                logger.warning(
+                    "Skip group message: FEISHU_BOT_OPEN_ID is empty, cannot verify @bot. "
+                    "message_id=%s",
+                    message_id,
+                )
                 return None
-            
-            # 清洗群聊文本中的@占位前缀
-            text = re.sub(r'^@_user_\d+\s*', '', text).strip()
+
+            bot_mentioned = any(_mention_open_id(m) == bot_open_expected for m in mentions)
+            if not bot_mentioned:
+                logger.info(
+                    "Skip group message: no mention with id.open_id=%s message_id=%s",
+                    bot_open_expected,
+                    message_id,
+                )
+                return None
+
+            logger.info(
+                "Group @bot matched: open_id=%s message_id=%s",
+                bot_open_expected,
+                message_id,
+            )
+            text = re.sub(r"^@_user_\d+\s*", "", text).strip()
         
         # ========== 增加调试：打印解析出的关键字段 ==========
         logger.info("Debug: extracted fields - message_id=%s, chat_id=%s, chat_type=%s, open_id=%s, text=%s, create_time=%s",

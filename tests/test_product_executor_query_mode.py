@@ -617,6 +617,11 @@ def test_internal_environment_readiness_endpoint():
         "proxy_source",
         "proxy_env",
         "feishu_resolved",
+        "bitable_write_enabled",
+        "bitable_config_ready",
+        "bitable_write_allowed",
+        "bitable_reason",
+        "bitable_missing",
     ):
         assert key in body
 

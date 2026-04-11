@@ -107,6 +107,7 @@ def execute_action(state: dict) -> dict:
                     executor, "get_final_backend", lambda: state.get("execution_backend", "sandbox_http_client")
                 )()
                 state["dry_run_failure"] = getattr(executor, "get_dry_run_failure", lambda: "none")()
+            state["query_product_data"] = result
             state["result_summary"] = format_product_query_result(result)
             state["status"] = "succeeded"
             state["platform"] = result.get("platform", state.get("platform", "mock"))
