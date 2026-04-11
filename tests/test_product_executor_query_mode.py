@@ -622,6 +622,7 @@ def test_internal_environment_readiness_endpoint():
         "bitable_write_allowed",
         "bitable_reason",
         "bitable_missing",
+        "bitable_ledger_strategy",
     ):
         assert key in body
 
