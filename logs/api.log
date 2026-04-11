@@ -1,0 +1,3 @@
+=== Starting FastAPI ===
+INFO:     Will watch for changes in these directories: ['/home/zed/feishu-rpa-commerce-agent']
+ERROR:    [Errno 98] Address already in use
