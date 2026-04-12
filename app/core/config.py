@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
 
+    # RAG / Milvus (optional enhancement layer; default off).
+    # Milvus command_interpretation rows should set intent_hint to match intent (e.g. product.query_sku_status / product.update_price).
+    # Graph skips command_interpretation when intent is unknown; failure tasks use failure_explanation in finalize_result.
+    ENABLE_RAG: bool = False
+    MILVUS_COLLECTION_NAME: str = ""
+    RAG_TOP_K: int = 5
+    RAG_SCORE_THRESHOLD: float = 0.0
+    # Must match collection vector dim (embedding field)
+    RAG_EMBEDDING_DIM: int = 128
+    RAG_USE_CASE_ENABLED_COMMAND_INTERPRETATION: bool = True
+    RAG_USE_CASE_ENABLED_RULE_AUGMENT: bool = True
+    RAG_USE_CASE_ENABLED_FAILURE_EXPLANATION: bool = True
+
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
     FEISHU_BOT_NAME: str = "commerce-agent-bot"

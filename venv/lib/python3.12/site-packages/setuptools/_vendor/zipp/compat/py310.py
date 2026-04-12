@@ -1,5 +1,5 @@
-import io
 import sys
+import io
 
 
 def _text_encoding(encoding, stacklevel=2, /):  # pragma: no cover
@@ -7,7 +7,5 @@ def _text_encoding(encoding, stacklevel=2, /):  # pragma: no cover
 
 
 text_encoding = (
-    io.text_encoding  # type: ignore[unused-ignore, attr-defined]
-    if sys.version_info > (3, 10)
-    else _text_encoding
+    io.text_encoding if sys.version_info > (3, 10) else _text_encoding  # type: ignore
 )

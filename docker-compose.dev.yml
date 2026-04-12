@@ -32,6 +32,7 @@ services:
   milvus:
     image: milvusdb/milvus:v2.3.3
     container_name: feishu-rpa-milvus
+    command: ["milvus", "run", "standalone"]
     environment:
       ETCD_USE_EMBED: "true"
       COMMON_STORAGETYPE: local

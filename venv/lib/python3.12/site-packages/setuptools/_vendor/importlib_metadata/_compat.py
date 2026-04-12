@@ -1,5 +1,6 @@
-import platform
 import sys
+import platform
+
 
 __all__ = ['install', 'NullFinder']
 

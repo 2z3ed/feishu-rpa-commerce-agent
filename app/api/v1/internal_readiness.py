@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from app.clients.environment_readiness import check_environment_readiness
 from app.clients.product_provider_readiness import check_query_provider_readiness
 from app.services.feishu.bitable_write import check_bitable_readiness
+from app.rag.retrieval_service import check_rag_readiness
 from app.core.logging import logger
 
 router = APIRouter(prefix="/internal/readiness", tags=["internal-readiness"])
@@ -42,4 +43,5 @@ def environment_readiness():
         )
     body = result.to_dict()
     body.update(check_bitable_readiness())
+    body.update(check_rag_readiness())
     return body
