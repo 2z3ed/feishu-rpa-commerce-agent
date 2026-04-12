@@ -1,5 +1,6 @@
 """
-Playwright-based RPA runner for product.update_price against internal pages only (not production).
+Playwright-based RPA runner for product.update_price (internal sandbox / admin-like / list_detail;
+plus P4.2 real_admin_prepared: config-driven home→catalog→detail read-only readback — no production write).
 
 Requires: pip install playwright && playwright install chromium
 
@@ -7,16 +8,18 @@ Targets:
 - sandbox: /internal/rpa-sandbox/update-price (minimal)
 - admin_like: hub → workbench /admin-like/update-price
 - list_detail: hub → catalog → product-detail → save
+- real_admin_prepared: external/mirror URLs from RPA_REAL_ADMIN_* + CSS selectors (read-only)
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urljoin
 
 from app.core.config import settings
 from app.core.logging import logger
 from app.rpa.schema import RpaExecutionInput, RpaExecutionOutput, RpaRunner
+from app.rpa.target_readiness import evaluate_rpa_target_readiness, norm_rpa_target_profile
 
 _ADMIN_FAILURE_MODES = frozenset({"none", "sku_missing", "save_error", "save_disabled"})
 _LIST_DETAIL_FAILURE_MODES = frozenset(
@@ -56,6 +59,92 @@ def _base_admin_like() -> str:
 def _base_list_detail() -> str:
     alt = (settings.RPA_LIST_DETAIL_BASE_URL or "").strip()
     return alt.rstrip("/") if alt else _base_sandbox()
+
+
+def _merge_header_json(*blobs: str) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for blob in blobs:
+        raw = (blob or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("RPA: invalid JSON in headers blob, skipped")
+            continue
+        if isinstance(data, dict):
+            for k, v in data.items():
+                merged[str(k)] = str(v)
+    return merged
+
+
+def _playwright_context_options() -> dict:
+    headers = _merge_header_json(
+        settings.RPA_BROWSER_EXTRA_HTTP_HEADERS_JSON,
+        settings.RPA_REAL_ADMIN_SESSION_HEADERS_JSON,
+    )
+    cookie = (settings.RPA_REAL_ADMIN_SESSION_COOKIE or "").strip()
+    if cookie:
+        headers["Cookie"] = cookie
+    if not headers:
+        return {}
+    return {"extra_http_headers": headers}
+
+
+def _real_admin_abs_url(base: str, path_or_url: str) -> str:
+    raw = (path_or_url or "").strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    b = (base or "").strip().rstrip("/")
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    return urljoin(b + "/", raw.lstrip("/"))
+
+
+def _real_admin_catalog_with_sku_query(catalog_path: str, param: str, sku: str) -> str:
+    cp = (catalog_path or "").strip()
+    sep = "&" if "?" in cp else "?"
+    return f"{cp}{sep}{quote(str(param), safe='')}={quote(str(sku), safe='')}"
+
+
+def _parse_float_loose(raw: str) -> float | None:
+    import re
+
+    s = (raw or "").strip().replace(",", "")
+    m = re.search(r"[-+]?\d*\.?\d+", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def _inject_browser_storage(page) -> None:
+    raw = (settings.RPA_BROWSER_STORAGE_INIT_JSON or "").strip()
+    if not raw:
+        return
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("RPA_BROWSER_STORAGE_INIT_JSON is not valid JSON")
+        return
+    if not isinstance(data, dict):
+        return
+    loc = data.get("localStorage")
+    if isinstance(loc, dict):
+        for key, val in loc.items():
+            page.evaluate(
+                "([k, v]) => { localStorage.setItem(k, v); }",
+                [str(key), str(val)],
+            )
+    sess = data.get("sessionStorage")
+    if isinstance(sess, dict):
+        for key, val in sess.items():
+            page.evaluate(
+                "([k, v]) => { sessionStorage.setItem(k, v); }",
+                [str(key), str(val)],
+            )
 
 
 def _enriched_pr(
@@ -144,23 +233,58 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
 
         timeout_ms = max(1000, int((settings.RPA_BROWSER_TIMEOUT_S or 30) * 1000))
         target_env = (settings.RPA_TARGET_ENV or "sandbox").lower().strip()
-        if bool(inp.params.get("_list_detail_verify_only")) and target_env != "list_detail":
+        profile_gate = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None))
+        verify_only = bool(inp.params.get("_list_detail_verify_only"))
+        if verify_only and profile_gate != "real_admin_prepared" and target_env != "list_detail":
             return RpaExecutionOutput(
                 success=False,
                 result_summary="list_detail verify_only requires RPA_TARGET_ENV=list_detail",
                 parsed_result={"sku": sku},
                 evidence_paths=paths,
                 error_code="rpa_verify_wrong_target_env",
-                error_message="api_then_rpa_verify 页面核验需 RPA_TARGET_ENV=list_detail（browser_real）",
+                error_message=(
+                    "api_then_rpa_verify 页面核验需 RPA_TARGET_ENV=list_detail（browser_real），"
+                    "或 RPA_TARGET_PROFILE=real_admin_prepared 走真实后台只读核验"
+                ),
             )
 
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=bool(settings.RPA_BROWSER_HEADLESS))
                 try:
-                    context = browser.new_context()
+                    ctx_opts = _playwright_context_options()
+                    context = browser.new_context(**ctx_opts)
                     page = context.new_page()
+                    _inject_browser_storage(page)
                     page.set_default_timeout(timeout_ms)
+                    profile = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None))
+                    if profile == "real_admin_prepared":
+                        rr = evaluate_rpa_target_readiness(settings)
+                        if not rr.ready:
+                            _tiny_failure_png(evidence_dir, paths)
+                            return RpaExecutionOutput(
+                                success=False,
+                                result_summary=rr.human_error_message(),
+                                parsed_result={
+                                    "sku": sku,
+                                    "rpa_target_profile": profile,
+                                    "readiness": rr.to_dict(),
+                                },
+                                evidence_paths=paths,
+                                error_code="rpa_target_readiness_failed",
+                                error_message=rr.human_error_message(),
+                            )
+                        return self._flow_real_admin_prepared_readonly(
+                            page,
+                            evidence_dir,
+                            paths,
+                            inp,
+                            sku,
+                            tp,
+                            cp,
+                            rr.to_dict(),
+                            timeout_ms=timeout_ms,
+                        )
                     if target_env == "list_detail":
                         return self._flow_list_detail(page, evidence_dir, paths, inp, sku, tp, cp)
                     if target_env == "admin_like":
@@ -650,6 +774,262 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
                 page.wait_for_timeout(400)
                 save_btn = page.locator('[data-testid="detail-save-btn"]')
         raise last_exc if last_exc else RuntimeError("save click failed")
+
+    def _flow_real_admin_prepared_readonly(
+        self,
+        page,
+        evidence_dir: Path,
+        paths: list[str],
+        inp: RpaExecutionInput,
+        sku: str,
+        tp: float,
+        cp: float,
+        readiness_snapshot: dict,
+        *,
+        timeout_ms: int,
+    ) -> RpaExecutionOutput:
+        """P4.2: home → catalog (SKU query) → detail, read-only readback + evidence."""
+        verify_only = bool(inp.params.get("_list_detail_verify_only"))
+        sku_u = sku.strip().upper()
+        base = (settings.RPA_REAL_ADMIN_BASE_URL or "").strip().rstrip("/")
+        home_path = (settings.RPA_REAL_ADMIN_HOME_PATH or "").strip()
+        catalog_path = (settings.RPA_REAL_ADMIN_CATALOG_PATH or "").strip()
+        detail_tmpl = (settings.RPA_REAL_ADMIN_DETAIL_PATH_TEMPLATE or "").strip()
+        sku_param = (settings.RPA_REAL_ADMIN_SKU_SEARCH_PARAM or "").strip()
+        price_sel = (settings.RPA_REAL_ADMIN_DETAIL_PRICE_SELECTOR or "").strip()
+        empty_sel = (settings.RPA_REAL_ADMIN_CATALOG_EMPTY_SELECTOR or "").strip()
+        sku_sel = (settings.RPA_REAL_ADMIN_DETAIL_SKU_SELECTOR or "").strip()
+        status_sel = (settings.RPA_REAL_ADMIN_DETAIL_STATUS_SELECTOR or "").strip()
+        msg_sel = (settings.RPA_REAL_ADMIN_DETAIL_MESSAGE_SELECTOR or "").strip()
+        new_price_sel = (settings.RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR or "").strip()
+
+        def fail(
+            *,
+            summary: str,
+            code: str,
+            message: str,
+            extra: dict | None = None,
+        ) -> RpaExecutionOutput:
+            p99 = _screenshot(page, evidence_dir / "99_failure.png")
+            if p99:
+                paths.append(p99)
+            pr: dict = {
+                "sku": sku_u,
+                "rpa_target_profile": "real_admin_prepared",
+                "readiness": readiness_snapshot,
+                "detail_loaded": False,
+                "target_sku_hit": False,
+            }
+            if extra:
+                pr.update(extra)
+            return RpaExecutionOutput(
+                success=False,
+                result_summary=summary,
+                parsed_result=pr,
+                evidence_paths=paths,
+                error_code=code,
+                error_message=message,
+            )
+
+        page.goto("about:blank", wait_until="domcontentloaded")
+        p0 = _screenshot(page, evidence_dir / "00_context_prepared.png")
+        if p0:
+            paths.append(p0)
+
+        home_url = _real_admin_abs_url(base, home_path)
+        try:
+            resp = page.goto(home_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as exc:
+            return fail(
+                summary=f"home navigation failed: {exc}",
+                code="rpa_real_admin_home_load_failed",
+                message=str(exc),
+            )
+        if resp is not None and resp.status >= 400:
+            return fail(
+                summary=f"home HTTP {resp.status}",
+                code="rpa_real_admin_home_load_failed",
+                message=f"home 页面打不开：HTTP {resp.status}",
+            )
+        p1 = _screenshot(page, evidence_dir / "01_home_loaded.png")
+        if p1:
+            paths.append(p1)
+
+        cat_rel = _real_admin_catalog_with_sku_query(catalog_path, sku_param, sku_u)
+        catalog_url = _real_admin_abs_url(base, cat_rel)
+        try:
+            cresp = page.goto(catalog_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as exc:
+            return fail(
+                summary=f"catalog navigation failed: {exc}",
+                code="rpa_real_admin_catalog_load_failed",
+                message=str(exc),
+            )
+        if cresp is not None and cresp.status >= 400:
+            return fail(
+                summary=f"catalog HTTP {cresp.status}",
+                code="rpa_real_admin_catalog_load_failed",
+                message=f"catalog 页面打不开：HTTP {cresp.status}",
+            )
+        try:
+            page.wait_for_timeout(400)
+            if empty_sel and page.locator(empty_sel).first.is_visible():
+                return fail(
+                    summary="catalog SKU search empty",
+                    code="rpa_real_admin_catalog_sku_not_found",
+                    message="SKU 搜索无结果（目录空态选择器可见）",
+                )
+        except Exception as exc:
+            return fail(
+                summary=f"catalog empty-state check failed: {exc}",
+                code="rpa_real_admin_catalog_load_failed",
+                message=str(exc),
+            )
+        p2 = _screenshot(page, evidence_dir / "02_catalog_loaded.png")
+        if p2:
+            paths.append(p2)
+
+        try:
+            detail_rel = detail_tmpl.format(sku=sku_u)
+        except KeyError:
+            detail_rel = detail_tmpl.replace("{sku}", quote(sku_u, safe=""))
+        detail_url = _real_admin_abs_url(base, detail_rel)
+        try:
+            dresp = page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as exc:
+            return fail(
+                summary=f"detail navigation failed: {exc}",
+                code="rpa_real_admin_detail_load_failed",
+                message=str(exc),
+            )
+        if dresp is not None and dresp.status >= 400:
+            return fail(
+                summary=f"detail HTTP {dresp.status}",
+                code="rpa_real_admin_detail_load_failed",
+                message=f"detail 页面打不开：HTTP {dresp.status}",
+            )
+
+        try:
+            page.locator(price_sel).first.wait_for(state="visible", timeout=timeout_ms)
+        except Exception as exc:
+            return fail(
+                summary=f"detail price selector missing: {price_sel!r}",
+                code="rpa_real_admin_detail_selector_missing",
+                message=f"detail 关键选择器缺失或不可见：{price_sel!r} ({exc})",
+                extra={"detail_loaded": True, "target_sku_hit": False},
+            )
+
+        p3 = _screenshot(page, evidence_dir / "03_detail_readback.png")
+        if p3:
+            paths.append(p3)
+
+        raw_price = ""
+        try:
+            pl = page.locator(price_sel).first
+            raw_price = (pl.inner_text(timeout=3000) or "").strip()
+            if not raw_price:
+                raw_price = (pl.input_value(timeout=3000) or "").strip()
+        except Exception:
+            raw_price = ""
+        page_cur = _parse_float_loose(raw_price)
+        if page_cur is None:
+            page_cur = float("nan")
+
+        page_disp = ""
+        if sku_sel:
+            try:
+                page_disp = (
+                    page.locator(sku_sel).first.inner_text(timeout=3000) or ""
+                ).strip().upper()
+            except Exception:
+                page_disp = ""
+
+        url_u = (page.url or "").upper()
+        target_hit = page_disp == sku_u if page_disp else sku_u in url_u
+
+        page_st = "loaded"
+        if status_sel:
+            try:
+                page_st = (
+                    page.locator(status_sel).first.inner_text(timeout=3000) or ""
+                ).strip() or "loaded"
+            except Exception:
+                page_st = "unknown"
+
+        page_msg = ""
+        if msg_sel:
+            try:
+                page_msg = (
+                    page.locator(msg_sel).first.inner_text(timeout=3000) or ""
+                ).strip()
+            except Exception:
+                page_msg = ""
+        if not page_msg:
+            page_msg = "real_admin_readback_ok" if target_hit else "real_admin_readback_sku_uncertain"
+
+        page_new_field = float(tp)
+        if new_price_sel:
+            try:
+                raw_n = (
+                    page.locator(new_price_sel).first.input_value(timeout=3000) or ""
+                ).strip()
+                if not raw_n:
+                    raw_n = (
+                        page.locator(new_price_sel).first.inner_text(timeout=3000) or ""
+                    ).strip()
+                parsed_n = _parse_float_loose(raw_n)
+                if parsed_n is not None:
+                    page_new_field = parsed_n
+            except Exception:
+                page_new_field = float(tp)
+
+        op = "readonly_verify" if verify_only else "readonly_readback"
+        old_enriched = page_cur if page_cur == page_cur else 0.0
+        pr_ok = _enriched_pr(
+            inp,
+            sku=page_disp or sku_u,
+            old_price=old_enriched,
+            new_price=page_new_field,
+            page_status=page_st,
+            page_message=page_msg,
+            operation_result=op,
+        )
+        pr_ok["sku"] = sku_u
+        pr_ok["page_sku"] = page_disp or sku_u
+        pr_ok["page_current_price"] = page_cur
+        pr_ok["page_new_price_field"] = page_new_field
+        pr_ok["detail_loaded"] = True
+        pr_ok["target_sku_hit"] = target_hit
+        pr_ok["rpa_target_profile"] = "real_admin_prepared"
+        pr_ok["readiness"] = readiness_snapshot
+        pr_ok["session_readback_ok"] = True
+
+        if not target_hit:
+            return fail(
+                summary="detail SKU mismatch vs expected",
+                code="rpa_real_admin_detail_sku_mismatch",
+                message=f"页面未命中目标 SKU：期望 {sku_u}，页面/URL 未对齐",
+                extra={
+                    "detail_loaded": True,
+                    "target_sku_hit": False,
+                    "page_sku": page_disp,
+                    "page_current_price": page_cur,
+                    "page_status": page_st,
+                    "page_message": page_msg,
+                },
+            )
+
+        return RpaExecutionOutput(
+            success=True,
+            result_summary=(
+                f"Playwright real_admin_prepared readback OK: {sku_u} page_price={page_cur}"
+                + (" (verify_only)" if verify_only else "")
+            ),
+            parsed_result=pr_ok,
+            evidence_paths=paths,
+            error_code=None,
+            error_message=None,
+        )
 
 
 def _tiny_failure_png(evidence_dir: Path, paths: list[str]) -> None:

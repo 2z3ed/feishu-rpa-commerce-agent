@@ -133,6 +133,36 @@ class Settings(BaseSettings):
     # list_detail only: none | sku_missing_in_list | detail_page_not_found | save_button_disabled | save_error
     RPA_LIST_DETAIL_FORCE_FAILURE_MODE: str = "none"
 
+    # P4.1 — target profile: internal controlled pages (default) vs real admin prep (config/readiness only).
+    RPA_TARGET_PROFILE: str = "internal_controlled"
+    # Real admin (preparation only; no production write automation in P4.1).
+    RPA_REAL_ADMIN_BASE_URL: str = ""
+    RPA_REAL_ADMIN_HOME_PATH: str = ""
+    RPA_REAL_ADMIN_CATALOG_PATH: str = ""
+    # Must include literal {sku}, e.g. /admin/products/edit?sku={sku}
+    RPA_REAL_ADMIN_DETAIL_PATH_TEMPLATE: str = ""
+    # Query param name or field name used to search SKU on list/catalog (documentation + readiness).
+    RPA_REAL_ADMIN_SKU_SEARCH_PARAM: str = ""
+    RPA_REAL_ADMIN_SKU_SEARCH_NOTES: str = ""
+    # P4.2 — 只读读回（CSS 选择器；真实后台请按 DOM 填写；本地 mirror 见 internal_rpa_real_admin_mirror）
+    RPA_REAL_ADMIN_DETAIL_PRICE_SELECTOR: str = ""
+    RPA_REAL_ADMIN_CATALOG_EMPTY_SELECTOR: str = ""
+    RPA_REAL_ADMIN_DETAIL_SKU_SELECTOR: str = ""
+    RPA_REAL_ADMIN_DETAIL_STATUS_SELECTOR: str = ""
+    RPA_REAL_ADMIN_DETAIL_MESSAGE_SELECTOR: str = ""
+    # api_then_rpa_verify 比对用；空则回退为请求 target_price
+    RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR: str = ""
+    # Session injection (no password automation): Cookie header value or JSON headers.
+    RPA_REAL_ADMIN_SESSION_COOKIE: str = ""
+    RPA_REAL_ADMIN_SESSION_HEADERS_JSON: str = ""
+    # Optional: merged into Playwright extra_http_headers for all browser_real runs (JSON object).
+    RPA_BROWSER_EXTRA_HTTP_HEADERS_JSON: str = ""
+    # Optional: {"localStorage":{"k":"v"},"sessionStorage":{}} applied before first navigation.
+    RPA_BROWSER_STORAGE_INIT_JSON: str = ""
+    # Optional safe GET probe to home URL when structurally ready (default off).
+    RPA_REAL_ADMIN_READINESS_HTTP_PROBE: bool = False
+    RPA_REAL_ADMIN_READINESS_PROBE_TIMEOUT_S: int = 5
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -6,6 +6,7 @@ from app.clients.product_provider_readiness import check_query_provider_readines
 from app.services.feishu.bitable_write import check_bitable_readiness
 from app.rag.retrieval_service import check_rag_readiness
 from app.core.logging import logger
+from app.core.config import settings
 
 router = APIRouter(prefix="/internal/readiness", tags=["internal-readiness"])
 
@@ -23,6 +24,15 @@ def query_sku_provider_readiness(provider: str = Query(default="sandbox")):
             result.errors,
         )
     return result.to_dict()
+
+
+@router.get("/rpa-target", include_in_schema=False)
+def rpa_target_readiness():
+    """P4.1: profile + config/session readiness for browser_real target (no production write)."""
+    from app.rpa.target_readiness import evaluate_rpa_target_readiness
+
+    rr = evaluate_rpa_target_readiness(settings)
+    return rr.to_dict()
 
 
 @router.get("/environment", include_in_schema=False)

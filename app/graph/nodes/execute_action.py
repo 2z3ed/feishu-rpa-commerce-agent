@@ -170,7 +170,14 @@ def execute_action(state: dict) -> dict:
                     state["evidence_count"] = int(rpa_meta_fail.get("evidence_count", 0))
                     state["verify_mode"] = str(rpa_meta_fail.get("verify_mode", "none"))
                     state["platform"] = rpa_meta_fail.get("platform", "woo")
-                    if rpa_meta_fail.get("execution_mode") == "api_then_rpa_verify":
+                    if rpa_meta_fail.get("rpa_readiness_failed"):
+                        state["backend_selection_reason"] = "rpa_readiness_failed"
+                        rd = rpa_meta_fail.get("readiness_details") or {}
+                        state["verify_passed"] = False
+                        state["verify_reason"] = str(
+                            rd.get("not_ready_reason") or rpa_meta_fail.get("verify_reason", "")
+                        )
+                    elif rpa_meta_fail.get("execution_mode") == "api_then_rpa_verify":
                         state["backend_selection_reason"] = "api_then_rpa_verify_failed"
                         state["verify_passed"] = bool(rpa_meta_fail.get("verify_passed", False))
                         state["verify_reason"] = str(rpa_meta_fail.get("verify_reason", ""))

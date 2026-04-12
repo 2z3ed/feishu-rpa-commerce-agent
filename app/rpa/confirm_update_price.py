@@ -9,8 +9,88 @@ from app.repositories.product_repo import product_repo
 from app.utils.task_logger import log_step
 from app.rpa.local_fake_runner import LocalFakeRpaRunner
 from app.rpa.schema import RpaExecutionInput, RpaRunner
+from app.rpa.target_readiness import RpaTargetReadinessResult, evaluate_rpa_target_readiness, norm_rpa_target_profile
 
 INTENT_PRODUCT_UPDATE_PRICE = "product.update_price"
+
+
+def _readiness_fail_meta(rr: RpaTargetReadinessResult, *, flow: str, evidence_dir: str) -> dict:
+    vm = str(settings.RPA_UPDATE_PRICE_VERIFY_MODE or "basic")
+    common = {
+        "rpa_readiness_failed": True,
+        "rpa_target_profile": rr.profile,
+        "readiness_details": rr.to_dict(),
+        "evidence_dir": evidence_dir,
+        "evidence_count": 0,
+        "evidence_paths": [],
+        "verify_mode": vm,
+        "platform": "woo",
+        "rpa_runner": settings.RPA_RUNNER_NAME or "browser_real",
+    }
+    if flow == "rpa":
+        common.update(
+            {
+                "execution_mode": "rpa",
+                "selected_backend": "rpa_browser_real",
+                "final_backend": "rpa_browser_real",
+                "execution_backend": "rpa_browser_real",
+            }
+        )
+        return common
+    common.update(
+        {
+            "execution_mode": "api_then_rpa_verify",
+            "selected_backend": "api_then_rpa_verify",
+            "final_backend": "api_then_rpa_verify",
+            "execution_backend": "api_then_rpa_verify",
+            "sku": "",
+            "old_price": None,
+            "target_price": None,
+            "api_result": None,
+            "api_price_after_update": None,
+            "page_status": "skipped",
+            "page_message": "",
+            "operation_result": "readiness_failed",
+            "verify_passed": False,
+            "verify_reason": rr.not_ready_reason or "readiness_failed",
+            "rpa_verification_skipped": True,
+            "rpa_backend_segment": "none",
+        }
+    )
+    return common
+
+
+def _maybe_browser_rpa_preflight(confirm_task_id: str, *, flow: str, evidence_dir: str) -> dict | None:
+    if (settings.RPA_RUNNER_TYPE or "").lower().strip() != "browser_real":
+        return None
+    profile = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None))
+    log_step(
+        confirm_task_id,
+        "profile_selected",
+        "success",
+        f"profile={profile} flow={flow}",
+    )
+    rr = evaluate_rpa_target_readiness(settings)
+    chk = (
+        f"ready={rr.ready} missing_config={','.join(rr.missing_config_fields)} "
+        f"missing_session={rr.missing_session} reason={rr.not_ready_reason}"
+    )[:900]
+    log_step(confirm_task_id, "readiness_checked", "processing", chk)
+    if not rr.ready:
+        log_step(
+            confirm_task_id,
+            "readiness_failed",
+            "failed",
+            (rr.human_error_message() or rr.not_ready_reason)[:900],
+        )
+        return {
+            "error": rr.human_error_message(),
+            "error_code": "rpa_target_readiness_failed",
+            "evidence_paths": [],
+            "_rpa_meta": _readiness_fail_meta(rr, flow=flow, evidence_dir=evidence_dir),
+        }
+    log_step(confirm_task_id, "readiness_succeeded", "success", "ok")
+    return None
 
 
 def _rpa_observability_meta(
@@ -163,6 +243,8 @@ def run_confirm_update_price_rpa(
     vm = (settings.RPA_UPDATE_PRICE_VERIFY_MODE or "basic").lower().strip()
     if vm not in ("none", "basic", "strict"):
         vm = "basic"
+    if pf := _maybe_browser_rpa_preflight(confirm_task_id, flow="rpa", evidence_dir=evidence_dir):
+        return None, pf
     sku_u_pre = sku.strip().upper()
     pd0 = product_repo.query_sku_status(sku_u_pre, "mock")
     current_for_page = float(pd0["price"]) if pd0 else 0.0
@@ -185,6 +267,7 @@ def run_confirm_update_price_rpa(
     backend_obs = getattr(runner, "rpa_backend_obs_id", "rpa_local_fake")
     out = runner.run(inp)
     vm_str = str(vm)
+    readonly_real_admin = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None)) == "real_admin_prepared"
 
     if not out.success:
         fail_meta = _rpa_observability_meta(
@@ -205,6 +288,33 @@ def run_confirm_update_price_rpa(
     pr = out.parsed_result
     sku_u = (pr.get("sku") or sku).strip().upper()
     dry_run = bool(pr.get("dry_run", inp.dry_run))
+
+    if readonly_real_admin:
+        try:
+            opc = float(pr.get("page_current_price", pr.get("old_price")))
+            if opc != opc:
+                opc = 0.0
+        except (TypeError, ValueError):
+            opc = 0.0
+        legacy = {
+            "sku": sku_u,
+            "old_price": opc,
+            "new_price": float(target_price),
+            "status": "success",
+            "platform": pr.get("platform", platform),
+            "readonly_real_admin_navigation": True,
+        }
+        meta = _rpa_observability_meta(
+            runner=runner,
+            evidence_dir=evidence_dir,
+            evidence_paths=list(out.evidence_paths or []),
+            verify_mode=vm_str,
+            platform=pr.get("platform", platform),
+            rpa_backend=backend_obs,
+        )
+        legacy["_rpa_meta"] = meta
+        legacy["rpa_evidence_paths"] = out.evidence_paths
+        return legacy, None
 
     if dry_run:
         pd = product_repo.query_sku_status(sku_u, "mock")
@@ -262,6 +372,13 @@ def run_confirm_update_price_api_then_rpa_verify(
     vm = (settings.RPA_UPDATE_PRICE_VERIFY_MODE or "basic").lower().strip()
     if vm not in ("none", "basic", "strict"):
         vm = "basic"
+    if pf := _maybe_browser_rpa_preflight(
+        confirm_task_id, flow="api_then_rpa_verify", evidence_dir=evidence_dir
+    ):
+        sku_u0 = sku.strip().upper()
+        pf["_rpa_meta"]["sku"] = sku_u0
+        pf["_rpa_meta"]["target_price"] = float(target_price)
+        return None, pf
     sku_u = sku.strip().upper()
     tp_f = float(target_price)
 
