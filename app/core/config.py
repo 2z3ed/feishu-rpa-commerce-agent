@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     # Dev: force sandbox page to return error after submit (browser runner only).
     RPA_BROWSER_FORCE_FAILURE: bool = False
 
+    # P3.2 — browser_real target: minimal internal page vs admin-like workbench (not production).
+    # Allowed: sandbox | admin_like (default: sandbox — existing /internal/rpa-sandbox/update-price)
+    RPA_TARGET_ENV: str = "sandbox"
+    # Optional override for admin-like entry + workbench; defaults to RPA_SANDBOX_BASE_URL.
+    RPA_ADMIN_LIKE_BASE_URL: str = ""
+    # admin_like only: none | sku_missing | save_error | save_disabled
+    RPA_ADMIN_LIKE_FORCE_FAILURE_MODE: str = "none"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

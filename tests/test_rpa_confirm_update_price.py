@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.core.config import settings
+from app.rpa.schema import RpaExecutionOutput
 from app.graph.nodes import execute_action
 from app.rpa.confirm_update_price import run_confirm_update_price_rpa
 from app.rpa.local_fake_runner import LocalFakeRpaRunner
@@ -78,6 +79,8 @@ def test_local_fake_runner_force_failure(tmp_path):
 
 
 def test_run_confirm_update_price_rpa_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", False)
     monkeypatch.setattr(settings, "RPA_UPDATE_PRICE_DRY_RUN", False)
@@ -97,6 +100,8 @@ def test_run_confirm_update_price_rpa_success(monkeypatch, tmp_path):
 
 
 def test_run_confirm_update_price_rpa_forced_fail(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", True)
     legacy, err = run_confirm_update_price_rpa(
@@ -186,6 +191,8 @@ def test_execute_action_confirm_failure_merges_rpa_meta(monkeypatch):
 
 
 def test_run_confirm_update_price_rpa_failure_includes_meta(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", True)
     legacy, err = run_confirm_update_price_rpa(
@@ -283,3 +290,89 @@ def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
     assert out.parsed_result.get("sku") == "A001"
     assert len(out.evidence_paths) >= 1
     mock_page.goto.assert_called_once()
+
+
+def test_internal_admin_like_hub_and_workbench():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app)
+    h = c.get("/api/v1/internal/rpa-sandbox/admin-like?sku=A001&failure_mode=none")
+    assert h.status_code == 200
+    assert "nav-to-update-price" in h.text
+    assert "admin-hub-root" in h.text
+    w = c.get(
+        "/api/v1/internal/rpa-sandbox/admin-like/update-price?sku=A001&current_price=59.9&target_price=39.9&failure_mode=none"
+    )
+    assert w.status_code == 200
+    assert "admin-update-root" in w.text
+    assert "locate-sku" in w.text
+    assert "save-price" in w.text
+
+
+def test_playwright_runner_dispatches_admin_like(monkeypatch, tmp_path):
+    from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
+    from app.rpa.schema import RpaExecutionInput
+
+    ev = tmp_path / "e"
+    ev.mkdir()
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "admin_like")
+    monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
+    monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
+
+    def fake_admin(self, page, evidence_dir, pths, inp, sku, tp, cp):
+        assert sku == "A001"
+        Path(evidence_dir, "stub.png").write_bytes(b"x")
+        return RpaExecutionOutput(
+            success=True,
+            result_summary="admin stub",
+            parsed_result={
+                "sku": sku,
+                "target_price": float(tp),
+                "old_price": float(cp),
+                "platform": "woo",
+                "dry_run": False,
+                "verify_mode": "basic",
+            },
+            evidence_paths=pths + [str(Path(evidence_dir) / "stub.png")],
+            error_code=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(PlaywrightUpdatePriceRunner, "_flow_admin_like", fake_admin)
+
+    mock_page = MagicMock()
+    mock_page.goto = MagicMock()
+    mock_page.fill = MagicMock()
+    mock_page.click = MagicMock()
+    mock_page.set_default_timeout = MagicMock()
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_instance = MagicMock()
+    mock_playwright_instance.chromium.launch.return_value = mock_browser
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_playwright_instance
+    mock_cm.__exit__.return_value = None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=mock_cm):
+        runner = PlaywrightUpdatePriceRunner(runner_name="browser_real", force_failure=False)
+        out = runner.run(
+            RpaExecutionInput(
+                task_id="T1",
+                trace_id="t",
+                intent="product.update_price",
+                platform="woo",
+                params={"sku": "A001", "target_price": 39.9, "current_price": 59.9},
+                timeout_s=30,
+                evidence_dir=str(ev),
+                verify_mode="basic",
+                dry_run=False,
+            )
+        )
+    assert out.success is True
+    assert "admin stub" in out.result_summary
+    assert len(out.evidence_paths) >= 2
