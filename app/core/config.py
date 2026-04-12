@@ -107,6 +107,17 @@ class Settings(BaseSettings):
     # Reserved; keep false — api_then_rpa_verify not implemented this phase.
     RPA_API_THEN_RPA_VERIFY_ENABLED: bool = False
 
+    # P3.1 — real browser runner (Playwright) against local sandbox only (not production).
+    # Allowed: local_fake | browser_real (default: local_fake)
+    RPA_RUNNER_TYPE: str = "local_fake"
+    RPA_BROWSER_HEADLESS: bool = True
+    # Base URL to reach this FastAPI app from the worker (Playwright navigates here).
+    RPA_SANDBOX_BASE_URL: str = "http://127.0.0.1:8000"
+    # Page load + selector wait budget (seconds); separate from RPA_UPDATE_PRICE_TIMEOUT_S graph budget.
+    RPA_BROWSER_TIMEOUT_S: int = 30
+    # Dev: force sandbox page to return error after submit (browser runner only).
+    RPA_BROWSER_FORCE_FAILURE: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

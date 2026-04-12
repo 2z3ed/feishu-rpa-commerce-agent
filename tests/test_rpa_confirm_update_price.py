@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from app.core.config import settings
 from app.graph.nodes import execute_action
@@ -197,3 +199,87 @@ def test_run_confirm_update_price_rpa_failure_includes_meta(monkeypatch, tmp_pat
     assert err["_rpa_meta"]["execution_mode"] == "rpa"
     assert err["_rpa_meta"]["evidence_count"] >= 1
     assert err["_rpa_meta"]["platform"] == "woo"
+    assert err["_rpa_meta"]["selected_backend"] == "rpa_local_fake"
+
+
+def test_get_update_price_runner_browser_real(monkeypatch):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "browser_real")
+    monkeypatch.setattr(settings, "RPA_BROWSER_FORCE_FAILURE", False)
+    from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
+    from app.rpa.confirm_update_price import get_update_price_runner
+
+    r = get_update_price_runner()
+    assert isinstance(r, PlaywrightUpdatePriceRunner)
+
+
+def test_internal_rpa_sandbox_page_contains_controls():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app)
+    r = c.get("/api/v1/internal/rpa-sandbox/update-price?sku=A001&current_price=59.9&target_price=39.9")
+    assert r.status_code == 200
+    assert "submit-btn" in r.text
+    assert "target-price" in r.text
+    assert "data-testid=\"sku\"" in r.text
+
+
+def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
+    from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
+    from app.rpa.schema import RpaExecutionInput
+
+    ev = tmp_path / "e"
+    ev.mkdir()
+    monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
+    monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
+
+    mock_page = MagicMock()
+    mock_page.goto = MagicMock()
+    mock_page.fill = MagicMock()
+    mock_page.click = MagicMock()
+    mock_page.set_default_timeout = MagicMock()
+    mock_loc = MagicMock()
+    mock_loc.get_attribute.side_effect = ["success", "39.9", "59.9"]
+    mock_loc.inner_text.return_value = "ok"
+    mock_page.locator.return_value = mock_loc
+    mock_page.wait_for_selector = MagicMock()
+
+    def shot(path=None, **kwargs):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(b"fakepng")
+
+    mock_page.screenshot = shot
+
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+
+    mock_playwright_instance = MagicMock()
+    mock_playwright_instance.chromium.launch.return_value = mock_browser
+
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_playwright_instance
+    mock_cm.__exit__.return_value = None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=mock_cm):
+        runner = PlaywrightUpdatePriceRunner(runner_name="browser_real", force_failure=False)
+        out = runner.run(
+            RpaExecutionInput(
+                task_id="T1",
+                trace_id="t",
+                intent="product.update_price",
+                platform="woo",
+                params={"sku": "A001", "target_price": 39.9, "current_price": 59.9},
+                timeout_s=30,
+                evidence_dir=str(ev),
+                verify_mode="basic",
+                dry_run=False,
+            )
+        )
+    assert out.success is True
+    assert out.parsed_result.get("sku") == "A001"
+    assert len(out.evidence_paths) >= 1
+    mock_page.goto.assert_called_once()

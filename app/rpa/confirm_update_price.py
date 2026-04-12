@@ -1,4 +1,4 @@
-"""Confirm-phase execution for product.update_price via RPA (dev fake runner)."""
+"""Confirm-phase execution for product.update_price via RPA (local_fake or browser_real)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,18 +19,20 @@ def _rpa_observability_meta(
     evidence_paths: list[str],
     verify_mode: str,
     platform: str,
+    rpa_backend: str,
 ) -> dict:
     """Same shape for success / failure so ingress action_executed stays consistent."""
+    runner_label = getattr(runner, "runner_name", None) or settings.RPA_RUNNER_NAME or "local_fake"
     return {
         "execution_mode": "rpa",
-        "rpa_runner": settings.RPA_RUNNER_NAME or getattr(runner, "runner_name", "local_fake"),
+        "rpa_runner": runner_label,
         "verify_mode": verify_mode,
         "evidence_dir": evidence_dir,
         "evidence_count": len(evidence_paths),
         "evidence_paths": evidence_paths,
-        "selected_backend": "rpa_local_fake",
-        "final_backend": "rpa_local_fake",
-        "execution_backend": "rpa_local_fake",
+        "selected_backend": rpa_backend,
+        "final_backend": rpa_backend,
+        "execution_backend": rpa_backend,
         "platform": platform,
     }
 
@@ -51,7 +53,16 @@ def build_evidence_dir(confirm_task_id: str) -> str:
 
 
 def get_update_price_runner(*, force_failure: bool | None = None) -> RpaRunner:
-    """Single factory for the dev-stage runner (swap for Playwright later)."""
+    """local_fake (default) | browser_real (Playwright + internal HTML sandbox)."""
+    rtype = (settings.RPA_RUNNER_TYPE or "local_fake").lower().strip()
+    if rtype == "browser_real":
+        from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
+
+        ff = settings.RPA_BROWSER_FORCE_FAILURE if force_failure is None else force_failure
+        name = settings.RPA_RUNNER_NAME or "browser_real"
+        if name.strip() == "local_fake":
+            name = "browser_real"
+        return PlaywrightUpdatePriceRunner(runner_name=name, force_failure=bool(ff))
     ff = settings.RPA_FAKE_RUNNER_FORCE_FAILURE if force_failure is None else force_failure
     return LocalFakeRpaRunner(
         runner_name=settings.RPA_RUNNER_NAME or "local_fake",
@@ -76,12 +87,19 @@ def run_confirm_update_price_rpa(
     vm = (settings.RPA_UPDATE_PRICE_VERIFY_MODE or "basic").lower().strip()
     if vm not in ("none", "basic", "strict"):
         vm = "basic"
+    sku_u_pre = sku.strip().upper()
+    pd0 = product_repo.query_sku_status(sku_u_pre, "mock")
+    current_for_page = float(pd0["price"]) if pd0 else 0.0
     inp = RpaExecutionInput(
         task_id=confirm_task_id,
         trace_id=trace_id or confirm_task_id,
         intent=INTENT_PRODUCT_UPDATE_PRICE,
         platform=platform,
-        params={"sku": sku, "target_price": target_price},
+        params={
+            "sku": sku,
+            "target_price": target_price,
+            "current_price": current_for_page,
+        },
         timeout_s=int(settings.RPA_UPDATE_PRICE_TIMEOUT_S or 180),
         evidence_dir=evidence_dir,
         verify_mode=vm,  # type: ignore[arg-type]
@@ -89,6 +107,7 @@ def run_confirm_update_price_rpa(
     )
     stub_api_then_rpa_verify_placeholder()
     runner = get_update_price_runner()
+    backend_obs = getattr(runner, "rpa_backend_obs_id", "rpa_local_fake")
     out = runner.run(inp)
     vm_str = str(vm)
 
@@ -99,6 +118,7 @@ def run_confirm_update_price_rpa(
             evidence_paths=list(out.evidence_paths or []),
             verify_mode=vm_str,
             platform=platform,
+            rpa_backend=backend_obs,
         )
         return None, {
             "error": out.error_message or "RPA 执行失败",
@@ -130,6 +150,7 @@ def run_confirm_update_price_rpa(
                 evidence_paths=list(out.evidence_paths or []),
                 verify_mode=vm_str,
                 platform=pr.get("platform", platform),
+                rpa_backend=backend_obs,
             )
             return None, {
                 "error": f"SKU {sku_u} 不存在",
@@ -144,6 +165,7 @@ def run_confirm_update_price_rpa(
         evidence_paths=list(out.evidence_paths or []),
         verify_mode=str(inp.verify_mode),
         platform=pr.get("platform", platform),
+        rpa_backend=backend_obs,
     )
     legacy["_rpa_meta"] = meta
     legacy["rpa_evidence_paths"] = out.evidence_paths

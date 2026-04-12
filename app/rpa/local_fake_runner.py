@@ -37,6 +37,8 @@ def _safe_write_evidence(evidence_dir: Path, name: str) -> str | None:
 class LocalFakeRpaRunner(RpaRunner):
     """Dev-only fake runner: evidence PNGs + optional forced failure (tests)."""
 
+    rpa_backend_obs_id = "rpa_local_fake"
+
     def __init__(self, *, runner_name: str = "local_fake", force_failure: bool = False):
         self.runner_name = runner_name
         self.force_failure = force_failure
