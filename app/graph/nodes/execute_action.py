@@ -11,6 +11,8 @@ from app.core.time import get_shanghai_now
 from app.executors import get_product_executor, resolve_execution_mode, resolve_query_platform
 from app.clients.woo_readonly_prep import get_woo_rollout_policy
 from app.core.config import settings
+from app.rpa.confirm_update_price import run_confirm_update_price_rpa
+from app.utils.task_logger import log_step
 
 
 def execute_action(state: dict) -> dict:
@@ -50,6 +52,9 @@ def execute_action(state: dict) -> dict:
     state["recommended_strategy"] = "n/a"
     state["environment_ready"] = "unknown"
     state["live_probe_enabled"] = "false"
+    state.setdefault("evidence_count", 0)
+    state.setdefault("rpa_runner", "none")
+    state.setdefault("verify_mode", "none")
     
     if intent_code == "unknown":
         state["error_message"] = "Unknown intent"
@@ -116,10 +121,23 @@ def execute_action(state: dict) -> dict:
         elif intent_code == "system.confirm_task":
             result = execute_task_confirmation(executor, state, slots)
             if result.get("status") == "success":
+                rpa_meta = result.pop("_rpa_meta", None)
+                result.pop("rpa_evidence_paths", None)
                 state["result_summary"] = format_task_confirmation_result(result)
                 state["status"] = "succeeded"
-                state["execution_backend"] = "mock_repo"
-                state["client_profile"] = "mock_repo"
+                if rpa_meta:
+                    state["execution_mode"] = rpa_meta.get("execution_mode", "rpa")
+                    state["execution_backend"] = rpa_meta.get("execution_backend", "rpa_local_fake")
+                    state["selected_backend"] = rpa_meta.get("selected_backend", "rpa_local_fake")
+                    state["final_backend"] = rpa_meta.get("final_backend", "rpa_local_fake")
+                    state["client_profile"] = "rpa_runner"
+                    state["rpa_runner"] = rpa_meta.get("rpa_runner", "none")
+                    state["evidence_count"] = int(rpa_meta.get("evidence_count", 0))
+                    state["verify_mode"] = str(rpa_meta.get("verify_mode", "none"))
+                    state["platform"] = result.get("platform", state.get("platform", "mock"))
+                else:
+                    state["execution_backend"] = "mock_repo"
+                    state["client_profile"] = "mock_repo"
                 state["response_mapper"] = "none"
                 state["request_adapter"] = "none"
                 state["auth_profile"] = "none"
@@ -127,10 +145,23 @@ def execute_action(state: dict) -> dict:
                 state["credential_profile"] = "none"
                 logger.info("Task confirmed and executed successfully: task_id=%s", slots.get('task_id'))
             else:
-                state["error_message"] = result.get("error", "确认失败")
+                rpa_meta_fail = result.pop("_rpa_meta", None)
+                err_msg = result.get("error", "确认失败")
+                state["error_message"] = err_msg
                 state["status"] = "failed"
-                state["result_summary"] = f"确认失败：{result.get('error')}"
-                logger.warning("Task confirmation failed: task_id=%s, error=%s", slots.get('task_id'), result.get('error'))
+                state["result_summary"] = f"确认失败：{err_msg}"
+                if rpa_meta_fail:
+                    state["execution_mode"] = rpa_meta_fail.get("execution_mode", "rpa")
+                    state["execution_backend"] = rpa_meta_fail.get("execution_backend", "rpa_local_fake")
+                    state["selected_backend"] = rpa_meta_fail.get("selected_backend", "rpa_local_fake")
+                    state["final_backend"] = rpa_meta_fail.get("final_backend", "rpa_local_fake")
+                    state["client_profile"] = "rpa_runner"
+                    state["rpa_runner"] = rpa_meta_fail.get("rpa_runner", "none")
+                    state["evidence_count"] = int(rpa_meta_fail.get("evidence_count", 0))
+                    state["verify_mode"] = str(rpa_meta_fail.get("verify_mode", "none"))
+                    state["platform"] = rpa_meta_fail.get("platform", "woo")
+                    state["backend_selection_reason"] = "rpa_confirm_failed"
+                logger.warning("Task confirmation failed: task_id=%s, error=%s", slots.get('task_id'), err_msg)
             
         elif intent_code == "product.update_price":
             result = execute_product_update_price(executor, state, slots)
@@ -329,8 +360,75 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         
         sku = sku_match.group(1)
         target_price = float(price_match.group(1))
-        
-        # Execute the price update
+
+        confirm_backend = (settings.PRODUCT_UPDATE_PRICE_CONFIRM_EXECUTION_BACKEND or "mock").lower().strip()
+
+        if confirm_backend == "rpa":
+            trace_id = (state.get("source_message_id") or "").strip() or current_task_id
+            log_step(
+                current_task_id,
+                "rpa_execution_started",
+                "processing",
+                f"target_task_id={confirmed_task_id} sku={sku} trace_id={trace_id}",
+            )
+            legacy, rpa_err = run_confirm_update_price_rpa(
+                confirm_task_id=current_task_id,
+                trace_id=trace_id,
+                sku=sku,
+                target_price=target_price,
+                platform="woo",
+            )
+            if rpa_err:
+                ec = rpa_err.get("error_code") or "rpa_error"
+                paths = rpa_err.get("evidence_paths") or []
+                detail = f"error_code={ec} msg={rpa_err.get('error', '')}"[:900]
+                log_step(current_task_id, "rpa_execution_failed", "failed", detail)
+                if paths:
+                    log_step(
+                        current_task_id,
+                        "evidence_collected",
+                        "success",
+                        f"count={len(paths)} sample={paths[0][:200] if paths else ''}",
+                    )
+                out_fail: dict = {"error": rpa_err.get("error", "RPA 执行失败")}
+                if rpa_err.get("_rpa_meta"):
+                    out_fail["_rpa_meta"] = rpa_err["_rpa_meta"]
+                return out_fail
+
+            result = legacy
+            rpa_meta = result.pop("_rpa_meta", None)
+            result.pop("rpa_evidence_paths", None)
+            if not result:
+                log_step(current_task_id, "rpa_execution_failed", "failed", "empty legacy result")
+                return {"error": "RPA 返回无效结果"}
+
+            now_ts = get_shanghai_now()
+            task_record.status = "succeeded"
+            task_record.result_summary = format_task_confirmation_result(result)
+            task_record.error_message = ""
+            task_record.finished_at = now_ts
+            task_record.updated_at = now_ts
+            db.commit()
+
+            result["confirmed_task_id"] = confirmed_task_id
+            if rpa_meta:
+                result["_rpa_meta"] = rpa_meta
+            log_step(
+                current_task_id,
+                "rpa_execution_succeeded",
+                "success",
+                f"evidence_count={rpa_meta.get('evidence_count', 0) if rpa_meta else 0}",
+            )
+            if rpa_meta and int(rpa_meta.get("evidence_count", 0)) > 0:
+                log_step(
+                    current_task_id,
+                    "evidence_collected",
+                    "success",
+                    f"count={rpa_meta.get('evidence_count', 0)} dir={rpa_meta.get('evidence_dir', '')}"[:900],
+                )
+            return result
+
+        # Default: mock repo executor (unchanged)
         result = executor.update_price(sku, target_price)
         if result:
             # Update the original task record to succeeded

@@ -78,6 +78,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         recommended_strategy = result.get("recommended_strategy", "n/a")
         environment_ready = result.get("environment_ready", "unknown")
         live_probe_enabled = result.get("live_probe_enabled", "false")
+        evidence_count = result.get("evidence_count", 0)
+        rpa_runner = result.get("rpa_runner", "none")
+        verify_mode = result.get("verify_mode", "none")
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         log_step(
             task_id,
@@ -93,7 +96,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 f"fallback_enabled={fallback_enabled}, fallback_applied={fallback_applied}, "
                 f"fallback_target={fallback_target}, final_backend={final_backend}, "
                 f"dry_run_failure={dry_run_failure}, recommended_strategy={recommended_strategy}, "
-                f"environment_ready={environment_ready}, live_probe_enabled={live_probe_enabled}"
+                f"environment_ready={environment_ready}, live_probe_enabled={live_probe_enabled}, "
+                f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}"
             ),
         )
         

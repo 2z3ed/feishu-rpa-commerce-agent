@@ -196,13 +196,15 @@ class ApiProductExecutor:
 
 
 class RpaProductExecutor:
-    """Placeholder for future RPA integration."""
+    """Graph confirm-phase RPA uses app.rpa.confirm_update_price (not this class)."""
 
     def query_sku_status(self, sku: str, platform: str = "woo") -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("RpaProductExecutor is not implemented in current mock stage.")
+        return product_repo.query_sku_status(sku, "mock")
 
     def update_price(self, sku: str, target_price: float, platform: str = "woo") -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("RpaProductExecutor is not implemented in current mock stage.")
+        raise NotImplementedError(
+            "RpaProductExecutor.update_price is not used; confirm flow calls run_confirm_update_price_rpa."
+        )
 
 
 class ApiThenRpaVerifyExecutor:

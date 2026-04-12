@@ -92,6 +92,21 @@ class Settings(BaseSettings):
     ODOO_SESSION_ID: str = ""
     ODOO_DB: str = ""
 
+    # --- RPA (dev-stage; confirm-phase for product.update_price only) ---
+    # Post-confirm execution: mock (default) | rpa — not exposed to Feishu users.
+    PRODUCT_UPDATE_PRICE_CONFIRM_EXECUTION_BACKEND: str = "mock"
+    RPA_EVIDENCE_BASE_DIR: str = "data/rpa_evidence"
+    RPA_UPDATE_PRICE_TIMEOUT_S: int = 180
+    # Allowed: none | basic | strict
+    RPA_UPDATE_PRICE_VERIFY_MODE: str = "basic"
+    # When true, RPA success does not mutate mock product_repo (dev inspection).
+    RPA_UPDATE_PRICE_DRY_RUN: bool = False
+    RPA_RUNNER_NAME: str = "local_fake"
+    # Test / dev: force LocalFakeRpaRunner to fail after evidence (failure screenshot).
+    RPA_FAKE_RUNNER_FORCE_FAILURE: bool = False
+    # Reserved; keep false — api_then_rpa_verify not implemented this phase.
+    RPA_API_THEN_RPA_VERIFY_ENABLED: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
