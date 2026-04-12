@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     ODOO_DB: str = ""
 
     # --- RPA (dev-stage; confirm-phase for product.update_price only) ---
-    # Post-confirm execution: mock (default) | rpa — not exposed to Feishu users.
+    # Post-confirm execution: mock | rpa | api_then_rpa_verify — not exposed to Feishu users.
     PRODUCT_UPDATE_PRICE_CONFIRM_EXECUTION_BACKEND: str = "mock"
     RPA_EVIDENCE_BASE_DIR: str = "data/rpa_evidence"
     RPA_UPDATE_PRICE_TIMEOUT_S: int = 180
@@ -104,8 +104,10 @@ class Settings(BaseSettings):
     RPA_RUNNER_NAME: str = "local_fake"
     # Test / dev: force LocalFakeRpaRunner to fail after evidence (failure screenshot).
     RPA_FAKE_RUNNER_FORCE_FAILURE: bool = False
-    # Reserved; keep false — api_then_rpa_verify not implemented this phase.
+    # Legacy no-op: use PRODUCT_UPDATE_PRICE_CONFIRM_EXECUTION_BACKEND=api_then_rpa_verify instead.
     RPA_API_THEN_RPA_VERIFY_ENABLED: bool = False
+    # P3.4 dev only: page URL shows a wrong current_price so readback mismatches API (tests / manual).
+    RPA_API_THEN_RPA_VERIFY_FORCE_PAGE_MISMATCH: bool = False
 
     # P3.1 — real browser runner (Playwright) against local sandbox only (not production).
     # Allowed: local_fake | browser_real (default: local_fake)

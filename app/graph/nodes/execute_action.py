@@ -11,7 +11,10 @@ from app.core.time import get_shanghai_now
 from app.executors import get_product_executor, resolve_execution_mode, resolve_query_platform
 from app.clients.woo_readonly_prep import get_woo_rollout_policy
 from app.core.config import settings
-from app.rpa.confirm_update_price import run_confirm_update_price_rpa
+from app.rpa.confirm_update_price import (
+    run_confirm_update_price_api_then_rpa_verify,
+    run_confirm_update_price_rpa,
+)
 from app.utils.task_logger import log_step
 
 
@@ -135,9 +138,16 @@ def execute_action(state: dict) -> dict:
                     state["evidence_count"] = int(rpa_meta.get("evidence_count", 0))
                     state["verify_mode"] = str(rpa_meta.get("verify_mode", "none"))
                     state["platform"] = result.get("platform", state.get("platform", "mock"))
+                    if rpa_meta.get("execution_mode") == "api_then_rpa_verify":
+                        state["backend_selection_reason"] = "api_then_rpa_verify_ok"
                 else:
                     state["execution_backend"] = "mock_repo"
                     state["client_profile"] = "mock_repo"
+                if "verify_passed" in result:
+                    state["verify_passed"] = result.get("verify_passed")
+                    state["verify_reason"] = str(result.get("verify_reason", ""))
+                    if result.get("api_price_after_update") is not None:
+                        state["api_price_after_update"] = result.get("api_price_after_update")
                 state["response_mapper"] = "none"
                 state["request_adapter"] = "none"
                 state["auth_profile"] = "none"
@@ -160,7 +170,12 @@ def execute_action(state: dict) -> dict:
                     state["evidence_count"] = int(rpa_meta_fail.get("evidence_count", 0))
                     state["verify_mode"] = str(rpa_meta_fail.get("verify_mode", "none"))
                     state["platform"] = rpa_meta_fail.get("platform", "woo")
-                    state["backend_selection_reason"] = "rpa_confirm_failed"
+                    if rpa_meta_fail.get("execution_mode") == "api_then_rpa_verify":
+                        state["backend_selection_reason"] = "api_then_rpa_verify_failed"
+                        state["verify_passed"] = bool(rpa_meta_fail.get("verify_passed", False))
+                        state["verify_reason"] = str(rpa_meta_fail.get("verify_reason", ""))
+                    else:
+                        state["backend_selection_reason"] = "rpa_confirm_failed"
                 logger.warning("Task confirmation failed: task_id=%s, error=%s", slots.get('task_id'), err_msg)
             
         elif intent_code == "product.update_price":
@@ -428,6 +443,58 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                 )
             return result
 
+        if confirm_backend == "api_then_rpa_verify":
+            trace_id = (state.get("source_message_id") or "").strip() or current_task_id
+            legacy, av_err = run_confirm_update_price_api_then_rpa_verify(
+                confirm_task_id=current_task_id,
+                trace_id=trace_id,
+                sku=sku,
+                target_price=target_price,
+                platform="woo",
+            )
+            if av_err:
+                ec = av_err.get("error_code") or "api_then_rpa_verify_error"
+                paths = av_err.get("evidence_paths") or []
+                detail = f"error_code={ec} msg={av_err.get('error', '')}"[:900]
+                log_step(current_task_id, "confirm_api_then_rpa_verify_failed", "failed", detail)
+                if paths:
+                    log_step(
+                        current_task_id,
+                        "evidence_collected",
+                        "success",
+                        f"count={len(paths)} sample={paths[0][:200] if paths else ''}",
+                    )
+                out_av: dict = {"error": av_err.get("error", "api_then_rpa_verify 失败")}
+                if av_err.get("_rpa_meta"):
+                    out_av["_rpa_meta"] = av_err["_rpa_meta"]
+                return out_av
+
+            result = legacy
+            rpa_meta = result.pop("_rpa_meta", None)
+            result.pop("rpa_evidence_paths", None)
+            if not result:
+                log_step(current_task_id, "confirm_api_then_rpa_verify_failed", "failed", "empty legacy result")
+                return {"error": "api_then_rpa_verify 返回无效结果"}
+
+            now_ts = get_shanghai_now()
+            task_record.status = "succeeded"
+            task_record.result_summary = format_task_confirmation_result(result)
+            task_record.error_message = ""
+            task_record.finished_at = now_ts
+            task_record.updated_at = now_ts
+            db.commit()
+
+            result["confirmed_task_id"] = confirmed_task_id
+            if rpa_meta:
+                result["_rpa_meta"] = rpa_meta
+            log_step(
+                current_task_id,
+                "confirm_api_then_rpa_verify_succeeded",
+                "success",
+                f"verify_passed={result.get('verify_passed')} evidence_count={rpa_meta.get('evidence_count', 0) if rpa_meta else 0}",
+            )
+            return result
+
         # Default: mock repo executor (unchanged)
         result = executor.update_price(sku, target_price)
         if result:
@@ -551,11 +618,18 @@ def format_task_confirmation_result(result: dict) -> str:
     Returns:
         Formatted result text message
     """
-    return (
-        f"✅ 确认执行成功\n"
-        f"SKU: {result.get('sku')}\n"
-        f"原价：{result.get('old_price')}\n"
-        f"新价格：{result.get('new_price')}\n"
-        f"执行结果：{result.get('status')}\n"
-        f"平台：{result.get('platform')}"
-    )
+    lines = [
+        "✅ 确认执行成功",
+        f"SKU: {result.get('sku')}",
+        f"原价：{result.get('old_price')}",
+        f"新价格：{result.get('new_price')}",
+        f"执行结果：{result.get('status')}",
+        f"平台：{result.get('platform')}",
+    ]
+    if "verify_passed" in result:
+        vp = result.get("verify_passed")
+        vr = result.get("verify_reason", "")
+        lines.append(f"页面核验：{'通过' if vp else '未通过'} ({vr})")
+        if result.get("api_price_after_update") is not None:
+            lines.append(f"API 回读价：{result.get('api_price_after_update')}")
+    return "\n".join(lines)

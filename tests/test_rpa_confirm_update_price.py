@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 from app.core.config import settings
 from app.rpa.schema import RpaExecutionOutput
 from app.graph.nodes import execute_action
-from app.rpa.confirm_update_price import run_confirm_update_price_rpa
+from app.repositories.product_repo import product_repo
+from app.rpa.confirm_update_price import (
+    run_confirm_update_price_api_then_rpa_verify,
+    run_confirm_update_price_rpa,
+)
 from app.rpa.local_fake_runner import LocalFakeRpaRunner
 from app.rpa.schema import RpaExecutionInput
 
@@ -239,6 +243,7 @@ def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
     ev = tmp_path / "e"
     ev.mkdir()
     monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
     monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
 
@@ -535,3 +540,146 @@ def test_playwright_runner_dispatches_list_detail(monkeypatch, tmp_path):
     assert out.success is True
     assert out.parsed_result.get("operation_result") == "saved"
     assert len(out.evidence_paths) >= 2
+
+
+def test_run_confirm_update_price_api_then_rpa_verify_success_local_fake(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "app.rpa.confirm_update_price.log_step",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    monkeypatch.setattr(settings, "RPA_API_THEN_RPA_VERIFY_FORCE_PAGE_MISMATCH", False)
+    orig = float(product_repo.query_sku_status("A001", "mock")["price"])
+    try:
+        legacy, err = run_confirm_update_price_api_then_rpa_verify(
+            confirm_task_id="TASK-AV-OK",
+            trace_id="t",
+            sku="A001",
+            target_price=39.9,
+            platform="mock",
+        )
+        assert err is None and legacy is not None
+        assert legacy["verify_passed"] is True
+        assert legacy["api_price_after_update"] == 39.9
+        meta = legacy["_rpa_meta"]
+        assert meta["execution_mode"] == "api_then_rpa_verify"
+        assert meta["verify_passed"] is True
+        assert float(product_repo.query_sku_status("A001", "mock")["price"]) == 39.9
+    finally:
+        product_repo.update_price("A001", orig, "mock")
+
+
+def test_run_confirm_update_price_api_then_rpa_verify_force_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "app.rpa.confirm_update_price.log_step",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    monkeypatch.setattr(settings, "RPA_API_THEN_RPA_VERIFY_FORCE_PAGE_MISMATCH", True)
+    orig = float(product_repo.query_sku_status("A001", "mock")["price"])
+    try:
+        _, err = run_confirm_update_price_api_then_rpa_verify(
+            confirm_task_id="TASK-AV-MIS",
+            trace_id="t",
+            sku="A001",
+            target_price=42.0,
+            platform="mock",
+        )
+        assert err is not None
+        assert err["error_code"] == "verify_compare_failed"
+        assert err["_rpa_meta"]["verify_passed"] is False
+        assert "price_mismatch" in (err["_rpa_meta"].get("verify_reason") or "")
+    finally:
+        product_repo.update_price("A001", orig, "mock")
+
+
+def test_run_confirm_update_price_api_then_rpa_verify_api_missing_sku(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "app.rpa.confirm_update_price.log_step",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    legacy, err = run_confirm_update_price_api_then_rpa_verify(
+        confirm_task_id="TASK-AV-API",
+        trace_id="t",
+        sku="ZZZ999",
+        target_price=1.0,
+        platform="mock",
+    )
+    assert legacy is None
+    assert err["error_code"] == "api_update_sku_not_found"
+    assert err["_rpa_meta"]["rpa_verification_skipped"] is True
+
+
+def test_execute_action_confirm_api_then_rpa_verify_ok_backend_reason(monkeypatch):
+    def fake_confirm(_executor, state, slots):
+        return {
+            "status": "success",
+            "sku": "A001",
+            "old_price": 59.9,
+            "new_price": 39.9,
+            "platform": "mock",
+            "verify_passed": True,
+            "verify_reason": "ok",
+            "api_price_after_update": 39.9,
+            "_rpa_meta": {
+                "execution_mode": "api_then_rpa_verify",
+                "execution_backend": "api_then_rpa_verify",
+                "selected_backend": "api_then_rpa_verify",
+                "final_backend": "api_then_rpa_verify",
+                "rpa_runner": "local_fake",
+                "evidence_count": 2,
+                "verify_mode": "basic",
+                "verify_passed": True,
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action.execute_task_confirmation",
+        fake_confirm,
+    )
+    state = {
+        "intent_code": "system.confirm_task",
+        "slots": {"task_id": "TASK-ORIG"},
+        "task_id": "TASK-CONFIRM",
+        "status": "processing",
+    }
+    out = execute_action.execute_action(state)
+    assert out["status"] == "succeeded"
+    assert out["backend_selection_reason"] == "api_then_rpa_verify_ok"
+    assert out["execution_mode"] == "api_then_rpa_verify"
+
+
+def test_execute_action_confirm_api_then_rpa_verify_fail_backend_reason(monkeypatch):
+    def fake_confirm(_executor, state, slots):
+        return {
+            "error": "页面核验未通过：price_mismatch",
+            "_rpa_meta": {
+                "execution_mode": "api_then_rpa_verify",
+                "execution_backend": "api_then_rpa_verify",
+                "selected_backend": "api_then_rpa_verify",
+                "final_backend": "api_then_rpa_verify",
+                "rpa_runner": "local_fake",
+                "evidence_count": 2,
+                "verify_mode": "basic",
+                "platform": "mock",
+                "verify_passed": False,
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action.execute_task_confirmation",
+        fake_confirm,
+    )
+    state = {
+        "intent_code": "system.confirm_task",
+        "slots": {"task_id": "TASK-ORIG"},
+        "task_id": "TASK-CONFIRM",
+        "status": "processing",
+    }
+    out = execute_action.execute_action(state)
+    assert out["status"] == "failed"
+    assert out["backend_selection_reason"] == "api_then_rpa_verify_failed"

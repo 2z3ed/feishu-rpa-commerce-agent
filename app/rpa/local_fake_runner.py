@@ -78,10 +78,6 @@ class LocalFakeRpaRunner(RpaRunner):
                 error_message="LocalFakeRpaRunner: force_failure enabled",
             )
 
-        p_after = _safe_write_evidence(evidence_dir, "03_after_action.png")
-        if p_after:
-            paths.append(p_after)
-
         if not sku:
             p = _safe_write_evidence(evidence_dir, "99_failure.png")
             if p:
@@ -94,6 +90,45 @@ class LocalFakeRpaRunner(RpaRunner):
                 error_code="rpa_invalid_params",
                 error_message="params.sku is required",
             )
+
+        if inp.params.get("_list_detail_verify_only"):
+            p_rb = _safe_write_evidence(evidence_dir, "04_detail_readback_stub.png")
+            if p_rb:
+                paths.append(p_rb)
+            try:
+                cp = float(inp.params.get("current_price"))
+            except (TypeError, ValueError):
+                cp = 0.0
+            try:
+                tp = float(inp.params.get("target_price"))
+            except (TypeError, ValueError):
+                tp = 0.0
+            return RpaExecutionOutput(
+                success=True,
+                result_summary=f"Local fake list_detail verify readback stub {sku}",
+                parsed_result={
+                    "page_sku": sku,
+                    "page_current_price": cp,
+                    "page_new_price_field": tp,
+                    "page_status": "loaded",
+                    "page_message": "local_fake_readonly_verify",
+                    "operation_result": "readonly_verify",
+                    "sku": sku,
+                    "old_price": cp,
+                    "new_price": tp,
+                    "target_price": tp,
+                    "platform": inp.platform,
+                    "dry_run": inp.dry_run,
+                    "verify_mode": inp.verify_mode,
+                },
+                evidence_paths=paths,
+                error_code=None,
+                error_message=None,
+            )
+
+        p_after = _safe_write_evidence(evidence_dir, "03_after_action.png")
+        if p_after:
+            paths.append(p_after)
 
         summary = (
             f"Local fake RPA completed for {sku} -> {target_price} "

@@ -144,6 +144,15 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
 
         timeout_ms = max(1000, int((settings.RPA_BROWSER_TIMEOUT_S or 30) * 1000))
         target_env = (settings.RPA_TARGET_ENV or "sandbox").lower().strip()
+        if bool(inp.params.get("_list_detail_verify_only")) and target_env != "list_detail":
+            return RpaExecutionOutput(
+                success=False,
+                result_summary="list_detail verify_only requires RPA_TARGET_ENV=list_detail",
+                parsed_result={"sku": sku},
+                evidence_paths=paths,
+                error_code="rpa_verify_wrong_target_env",
+                error_message="api_then_rpa_verify 页面核验需 RPA_TARGET_ENV=list_detail（browser_real）",
+            )
 
         try:
             with sync_playwright() as p:
@@ -482,6 +491,49 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
             )
 
         page.wait_for_selector('[data-testid="detail-product-root"]')
+        verify_only = bool(inp.params.get("_list_detail_verify_only"))
+        if verify_only:
+            p4r = _screenshot(page, evidence_dir / "04_detail_readback.png")
+            if p4r:
+                paths.append(p4r)
+            sku_disp = (page.locator('[data-testid="detail-sku-display"]').inner_text() or "").strip().upper()
+            cur_txt = (page.locator('[data-testid="detail-current-price"]').inner_text() or "").strip()
+            try:
+                page_cur = float(cur_txt)
+            except (TypeError, ValueError):
+                page_cur = float("nan")
+            new_raw = page.locator('[data-testid="detail-new-price"]').input_value() or "0"
+            try:
+                page_new_field = float(new_raw)
+            except (TypeError, ValueError):
+                page_new_field = float("nan")
+            res_el = page.locator("#detail-result")
+            dstatus = res_el.get_attribute("data-status") or ""
+            dpage = res_el.get_attribute("data-page-status") or ""
+            msg = (res_el.inner_text() or "").strip()
+            page_st = dpage or dstatus or "loaded"
+            op_res = "readonly_verify"
+            pr_verify = _enriched_pr(
+                inp,
+                sku=sku_disp or sku,
+                old_price=page_cur,
+                new_price=page_new_field,
+                page_status=page_st,
+                page_message=msg or "detail_loaded",
+                operation_result=op_res,
+            )
+            pr_verify["page_sku"] = sku_disp or sku
+            pr_verify["page_current_price"] = page_cur
+            pr_verify["page_new_price_field"] = page_new_field
+            return RpaExecutionOutput(
+                success=True,
+                result_summary=f"Playwright list_detail verify readback OK: {sku_disp or sku} page_price={page_cur}",
+                parsed_result=pr_verify,
+                evidence_paths=paths,
+                error_code=None,
+                error_message=None,
+            )
+
         p4 = _screenshot(page, evidence_dir / "04_detail_before_save.png")
         if p4:
             paths.append(p4)
