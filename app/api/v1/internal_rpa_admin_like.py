@@ -12,11 +12,19 @@ from app.core.config import settings
 router = APIRouter(prefix="/internal/rpa-sandbox/admin-like", tags=["internal-rpa-admin-like"])
 
 _VALID_FAILURE = frozenset({"none", "sku_missing", "save_error", "save_disabled"})
+_VALID_LIST_DETAIL_FAILURE = frozenset(
+    {"none", "sku_missing_in_list", "detail_page_not_found", "save_button_disabled", "save_error"}
+)
 
 
 def _norm_failure_mode(raw: str) -> str:
     v = (raw or "none").lower().strip()
     return v if v in _VALID_FAILURE else "none"
+
+
+def _norm_list_detail_failure_mode(raw: str) -> str:
+    v = (raw or "none").lower().strip()
+    return v if v in _VALID_LIST_DETAIL_FAILURE else "none"
 
 
 @router.get("", include_in_schema=False, response_class=HTMLResponse)
@@ -30,17 +38,17 @@ def admin_like_hub(
     if not settings.ENABLE_INTERNAL_SANDBOX_API:
         raise HTTPException(status_code=503, detail="internal sandbox api disabled")
 
-    fm = _norm_failure_mode(failure_mode)
-    sku_e = html.escape(sku.strip().upper()[:64])
-    q = urlencode(
-        {
-            "sku": sku.strip().upper()[:64],
-            "current_price": f"{float(current_price):.4f}",
-            "target_price": f"{float(target_price):.4f}",
-            "failure_mode": fm,
-        }
-    )
-    next_path = f"/api/v1/internal/rpa-sandbox/admin-like/update-price?{q}"
+    sku_u = sku.strip().upper()[:64]
+    sku_e = html.escape(sku_u)
+    cf_s = f"{float(current_price):.4f}"
+    tf_s = f"{float(target_price):.4f}"
+    base_q = {"sku": sku_u, "current_price": cf_s, "target_price": tf_s}
+    # Hub is shared by admin_like (workbench) and list_detail (catalog → detail). List-detail modes
+    # (e.g. detail_page_not_found) are not valid for /update-price; keep them on the catalog link only.
+    q_update = urlencode({**base_q, "failure_mode": _norm_failure_mode(failure_mode)})
+    q_catalog = urlencode({**base_q, "failure_mode": _norm_list_detail_failure_mode(failure_mode)})
+    next_path = f"/api/v1/internal/rpa-sandbox/admin-like/update-price?{q_update}"
+    catalog_path = f"/api/v1/internal/rpa-sandbox/admin-like/catalog?{q_catalog}"
 
     page = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -77,7 +85,8 @@ def admin_like_hub(
   <div class="layout">
     <aside class="sider" data-testid="admin-sider">
       <span style="padding:0 16px;font-size:12px;color:#999;">目录</span>
-      <a href="{html.escape(next_path)}" data-testid="nav-to-update-price">商品 · 改价</a>
+      <a href="{html.escape(catalog_path)}" data-testid="nav-to-catalog">商品 · 目录</a>
+      <a href="{html.escape(next_path)}" data-testid="nav-to-update-price">商品 · 改价（工作台）</a>
     </aside>
     <main class="content">
       <div class="card">
@@ -253,6 +262,276 @@ def admin_like_update_price_page(
         out.setAttribute("data-old-price", String(dataCur));
         out.setAttribute("data-new-price", String(v));
         out.textContent = "已保存：价格更新为 " + v;
+      }});
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=page)
+
+
+@router.get("/catalog", include_in_schema=False, response_class=HTMLResponse)
+def admin_like_catalog_page(
+    sku: str = Query(default="A001"),
+    current_price: float = Query(default=59.9),
+    target_price: float = Query(default=39.9),
+    failure_mode: str = Query(default="none"),
+):
+    """Product list (P3.3): search, table, link to detail — internal RPA only."""
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+
+    fm = _norm_list_detail_failure_mode(failure_mode)
+    sku_u = sku.strip().upper()[:64]
+    sku_e = html.escape(sku_u)
+    cf = float(current_price)
+    tf = float(target_price)
+    q_detail = urlencode(
+        {
+            "sku": sku_u,
+            "current_price": f"{cf:.4f}",
+            "target_price": f"{tf:.4f}",
+            "failure_mode": fm,
+            "broken": "1" if fm == "detail_page_not_found" else "0",
+        }
+    )
+    detail_href = html.escape(f"/api/v1/internal/rpa-sandbox/admin-like/product-detail?{q_detail}")
+
+    page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Commerce 后台 · 商品列表</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }}
+    .topbar {{
+      height: 48px; background: #001529; color: #fff; display: flex; align-items: center;
+      padding: 0 16px; font-size: 15px; font-weight: 600;
+    }}
+    .layout {{ display: flex; min-height: calc(100vh - 48px); }}
+    .sider {{ width: 200px; background: #fff; border-right: 1px solid #e8e8e8; padding: 12px 0; }}
+    .sider span {{ padding: 0 16px; font-size: 12px; color: #999; }}
+    .content {{ flex: 1; padding: 20px 24px; }}
+    .panel {{
+      background: #fff; border-radius: 8px; padding: 16px 20px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.06);
+    }}
+    h1 {{ margin: 0 0 12px; font-size: 18px; }}
+    .toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }}
+    input.search {{ padding: 8px 10px; width: 220px; border: 1px solid #d9d9d9; border-radius: 4px; }}
+    button.btn {{
+      padding: 8px 16px; background: #1677ff; color: #fff; border: none; border-radius: 4px;
+      cursor: pointer; font-size: 14px;
+    }}
+    .meta {{ font-size: 13px; color: #8c8c8c; margin-bottom: 8px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+    th, td {{ border: 1px solid #f0f0f0; padding: 10px 12px; text-align: left; }}
+    th {{ background: #fafafa; }}
+    tbody tr:hover {{ background: #fafafa; }}
+    #list-empty {{
+      display: none; padding: 24px; text-align: center; color: #a8071a;
+      background: #fff2f0; border: 1px solid #ffccc7; border-radius: 4px; margin-top: 8px;
+    }}
+    #list-empty[data-visible="1"] {{ display: block; }}
+    #catalog-table-wrap {{ display: none; }}
+    #catalog-table-wrap[data-visible="1"] {{ display: block; }}
+    a.row-link {{ color: #1677ff; text-decoration: none; }}
+    a.row-link:hover {{ text-decoration: underline; }}
+  </style>
+</head>
+<body data-testid="catalog-root" data-session-sku="{sku_e}" data-failure-mode="{html.escape(fm)}">
+  <header class="topbar" data-testid="catalog-topbar">Commerce 后台 · 商品中心</header>
+  <div class="layout">
+    <aside class="sider"><span>导航</span></aside>
+    <main class="content">
+      <div class="panel">
+        <h1>商品列表</h1>
+        <p class="meta" data-testid="list-result-hint">共 <span id="result-count">0</span> 条（受控环境）</p>
+        <div class="toolbar">
+          <label for="catalog-search">SKU</label>
+          <input type="text" id="catalog-search" class="search" data-testid="catalog-search" value="{sku_e}" autocomplete="off"/>
+          <button type="button" class="btn" id="catalog-search-btn" data-testid="catalog-search-btn">搜索</button>
+        </div>
+        <div id="list-empty" data-testid="list-empty" data-visible="0">未找到匹配商品（列表为空）</div>
+        <div id="catalog-table-wrap" data-visible="0">
+          <table data-testid="catalog-table">
+            <thead><tr><th>SKU</th><th>商品名</th><th>价格</th><th>操作</th></tr></thead>
+            <tbody id="catalog-tbody">
+              <tr data-testid="product-row" data-sku="{sku_e}" style="display:none;">
+                <td>{sku_e}</td>
+                <td>受控示例商品</td>
+                <td data-testid="row-price">{cf:.2f}</td>
+                <td><a class="row-link" data-testid="open-product-detail" href="{detail_href}">编辑</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    (function () {{
+      var body = document.body;
+      var mode = body.getAttribute("data-failure-mode") || "none";
+      var sessionSku = (body.getAttribute("data-session-sku") || "").trim().toUpperCase();
+      var inp = document.getElementById("catalog-search");
+      var btn = document.getElementById("catalog-search-btn");
+      var empty = document.getElementById("list-empty");
+      var wrap = document.getElementById("catalog-table-wrap");
+      var countEl = document.getElementById("result-count");
+      var row = document.querySelector("[data-testid=product-row]");
+
+      function runSearch() {{
+        var q = (inp.value || "").trim().toUpperCase();
+        empty.setAttribute("data-visible", "0");
+        wrap.setAttribute("data-visible", "0");
+        row.style.display = "none";
+        countEl.textContent = "0";
+
+        if (mode === "sku_missing_in_list") {{
+          empty.setAttribute("data-visible", "1");
+          empty.textContent = "未找到匹配商品（受控失败：sku_missing_in_list）";
+          return;
+        }}
+        if (q !== sessionSku) {{
+          empty.setAttribute("data-visible", "1");
+          empty.textContent = "搜索无结果：SKU 与当前任务不一致";
+          return;
+        }}
+        row.style.display = "table-row";
+        wrap.setAttribute("data-visible", "1");
+        countEl.textContent = "1";
+      }}
+      btn.addEventListener("click", runSearch);
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=page)
+
+
+@router.get("/product-detail", include_in_schema=False, response_class=HTMLResponse)
+def admin_like_product_detail_page(
+    sku: str = Query(default="A001"),
+    current_price: float = Query(default=59.9),
+    target_price: float = Query(default=39.9),
+    failure_mode: str = Query(default="none"),
+    broken: int = Query(default=0, ge=0, le=1),
+):
+    """Detail / edit (P3.3); broken=1 simulates detail not loading."""
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+
+    fm = _norm_list_detail_failure_mode(failure_mode)
+    sku_u = sku.strip().upper()[:64]
+    sku_e = html.escape(sku_u)
+    cf = float(current_price)
+    tf = float(target_price)
+    save_dis = fm == "save_button_disabled"
+
+    if broken:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><title>404</title></head>
+<body data-testid="detail-not-found" style="font-family:system-ui;padding:2rem;">
+  <h1>页面无法打开</h1>
+  <p data-testid="detail-error-msg">商品详情不存在或已删除（受控失败：detail_page_not_found）</p>
+  <p>SKU: {sku_e}</p>
+</body></html>"""
+        )
+
+    save_attr = "disabled" if save_dis else ""
+    page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>商品详情 · 编辑</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }}
+    .topbar {{ height: 48px; background: #001529; color: #fff; display: flex; align-items: center; padding: 0 16px; font-weight: 600; }}
+    .wrap {{ max-width: 720px; margin: 20px auto; padding: 0 16px; }}
+    .panel {{
+      background: #fff; border-radius: 8px; padding: 24px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.06);
+    }}
+    h1 {{ margin: 0 0 8px; font-size: 20px; }}
+    .breadcrumb {{ font-size: 12px; color: #8c8c8c; margin-bottom: 16px; }}
+    .field {{ margin: 12px 0; font-size: 14px; }}
+    .field label {{ display: block; color: #595959; margin-bottom: 4px; }}
+    .field input {{ width: 100%; max-width: 280px; padding: 8px 10px; border: 1px solid #d9d9d9; border-radius: 4px; }}
+    button.save {{
+      margin-top: 16px; padding: 8px 24px; background: #1677ff; color: #fff; border: none;
+      border-radius: 4px; cursor: pointer; font-size: 14px;
+    }}
+    button.save:disabled {{ background: #bfbfbf; cursor: not-allowed; }}
+    #detail-result {{
+      margin-top: 20px; padding: 12px; border: 1px solid #d9d9d9; border-radius: 4px; min-height: 48px;
+      font-size: 14px;
+    }}
+    #detail-result[data-status="error"] {{ border-color: #ff7875; background: #fff2f0; }}
+    #detail-result[data-status="success"] {{ border-color: #52c41a; background: #f6ffed; }}
+    .card-head {{ font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f0f0f0; }}
+  </style>
+</head>
+<body
+  data-testid="detail-product-root"
+  data-failure-mode="{html.escape(fm)}"
+  data-sku="{sku_e}"
+  data-current-price="{cf:.4f}"
+>
+  <header class="topbar" data-testid="detail-topbar">Commerce 后台</header>
+  <div class="wrap">
+    <div class="breadcrumb" data-testid="detail-breadcrumb">商品 / 列表 / 详情编辑</div>
+    <div class="panel">
+      <h1 data-testid="detail-title">商品详情</h1>
+      <div class="card-head">基本信息</div>
+      <div class="field"><label>SKU</label><div data-testid="detail-sku-display">{sku_e}</div></div>
+      <div class="field"><label>当前价格</label><div data-testid="detail-current-price">{cf:.2f}</div></div>
+      <div class="field">
+        <label for="detail-new-price">新价格</label>
+        <input type="number" step="0.01" id="detail-new-price" data-testid="detail-new-price" value="{tf:.2f}"/>
+      </div>
+      <button type="button" class="save" id="detail-save-btn" data-testid="detail-save-btn" {save_attr}>保存更改</button>
+      <div id="detail-result" data-testid="detail-result" data-status="" data-page-status="">保存后将显示操作结果</div>
+    </div>
+  </div>
+  <script>
+    (function () {{
+      var mode = document.body.getAttribute("data-failure-mode") || "none";
+      var cur = parseFloat(document.body.getAttribute("data-current-price") || "0");
+      var newp = document.getElementById("detail-new-price");
+      var save = document.getElementById("detail-save-btn");
+      var out = document.getElementById("detail-result");
+
+      save.addEventListener("click", function () {{
+        if (save.disabled) {{
+          out.setAttribute("data-status", "error");
+          out.setAttribute("data-page-status", "error");
+          out.textContent = "保存按钮不可用（受控失败：save_button_disabled）";
+          return;
+        }}
+        var v = parseFloat(newp.value);
+        if (isNaN(v)) {{
+          out.setAttribute("data-status", "error");
+          out.setAttribute("data-page-status", "error");
+          out.textContent = "价格无效";
+          return;
+        }}
+        if (mode === "save_error") {{
+          out.setAttribute("data-status", "error");
+          out.setAttribute("data-page-status", "error");
+          out.textContent = "保存失败：后台拒绝（受控失败：save_error）";
+          return;
+        }}
+        out.setAttribute("data-status", "success");
+        out.setAttribute("data-page-status", "success");
+        out.setAttribute("data-old-price", String(cur));
+        out.setAttribute("data-new-price", String(v));
+        out.setAttribute("data-operation-result", "saved");
+        out.textContent = "保存成功，新价格：" + v;
       }});
     }})();
   </script>

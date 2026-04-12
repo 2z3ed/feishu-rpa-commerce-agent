@@ -119,12 +119,17 @@ class Settings(BaseSettings):
     RPA_BROWSER_FORCE_FAILURE: bool = False
 
     # P3.2 — browser_real target: minimal internal page vs admin-like workbench (not production).
-    # Allowed: sandbox | admin_like (default: sandbox — existing /internal/rpa-sandbox/update-price)
+    # Allowed: sandbox | admin_like | list_detail (list_detail = hub → catalog → detail → save)
     RPA_TARGET_ENV: str = "sandbox"
     # Optional override for admin-like entry + workbench; defaults to RPA_SANDBOX_BASE_URL.
     RPA_ADMIN_LIKE_BASE_URL: str = ""
     # admin_like only: none | sku_missing | save_error | save_disabled
     RPA_ADMIN_LIKE_FORCE_FAILURE_MODE: str = "none"
+
+    # P3.3 — list → detail → edit (internal only). Base URL; empty = RPA_SANDBOX_BASE_URL.
+    RPA_LIST_DETAIL_BASE_URL: str = ""
+    # list_detail only: none | sku_missing_in_list | detail_page_not_found | save_button_disabled | save_error
+    RPA_LIST_DETAIL_FORCE_FAILURE_MODE: str = "none"
 
     class Config:
         env_file = ".env"

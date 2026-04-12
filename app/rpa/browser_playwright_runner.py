@@ -5,7 +5,8 @@ Requires: pip install playwright && playwright install chromium
 
 Targets:
 - sandbox: /internal/rpa-sandbox/update-price (minimal)
-- admin_like: hub /internal/rpa-sandbox/admin-like → workbench /admin-like/update-price
+- admin_like: hub → workbench /admin-like/update-price
+- list_detail: hub → catalog → product-detail → save
 """
 from __future__ import annotations
 
@@ -18,6 +19,9 @@ from app.core.logging import logger
 from app.rpa.schema import RpaExecutionInput, RpaExecutionOutput, RpaRunner
 
 _ADMIN_FAILURE_MODES = frozenset({"none", "sku_missing", "save_error", "save_disabled"})
+_LIST_DETAIL_FAILURE_MODES = frozenset(
+    {"none", "sku_missing_in_list", "detail_page_not_found", "save_button_disabled", "save_error"}
+)
 
 
 def _screenshot(page, path: Path) -> str | None:
@@ -35,6 +39,11 @@ def _norm_admin_failure_mode(raw: str) -> str:
     return v if v in _ADMIN_FAILURE_MODES else "none"
 
 
+def _norm_list_detail_failure_mode(raw: str) -> str:
+    v = (raw or "none").lower().strip()
+    return v if v in _LIST_DETAIL_FAILURE_MODES else "none"
+
+
 def _base_sandbox() -> str:
     return (settings.RPA_SANDBOX_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
 
@@ -42,6 +51,36 @@ def _base_sandbox() -> str:
 def _base_admin_like() -> str:
     alt = (settings.RPA_ADMIN_LIKE_BASE_URL or "").strip()
     return alt.rstrip("/") if alt else _base_sandbox()
+
+
+def _base_list_detail() -> str:
+    alt = (settings.RPA_LIST_DETAIL_BASE_URL or "").strip()
+    return alt.rstrip("/") if alt else _base_sandbox()
+
+
+def _enriched_pr(
+    inp: RpaExecutionInput,
+    *,
+    sku: str,
+    old_price: float,
+    new_price: float,
+    page_status: str,
+    page_message: str,
+    operation_result: str,
+) -> dict:
+    """Stable fields for future api_then_rpa_verify."""
+    return {
+        "sku": sku,
+        "old_price": old_price,
+        "new_price": new_price,
+        "target_price": new_price,
+        "page_status": page_status,
+        "page_message": page_message,
+        "operation_result": operation_result,
+        "platform": inp.platform,
+        "dry_run": inp.dry_run,
+        "verify_mode": inp.verify_mode,
+    }
 
 
 class PlaywrightUpdatePriceRunner(RpaRunner):
@@ -113,6 +152,8 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
                     context = browser.new_context()
                     page = context.new_page()
                     page.set_default_timeout(timeout_ms)
+                    if target_env == "list_detail":
+                        return self._flow_list_detail(page, evidence_dir, paths, inp, sku, tp, cp)
                     if target_env == "admin_like":
                         return self._flow_admin_like(page, evidence_dir, paths, inp, sku, tp, cp)
                     return self._flow_sandbox(
@@ -327,21 +368,236 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
         except (TypeError, ValueError):
             old_f = cp
 
+        ok_msg = (loc.inner_text() or "").strip()
         return RpaExecutionOutput(
             success=True,
             result_summary=f"Playwright admin_like OK: {sku} {old_f} -> {new_f}",
-            parsed_result={
-                "sku": sku,
-                "target_price": new_f,
-                "old_price": old_f,
-                "platform": inp.platform,
-                "dry_run": inp.dry_run,
-                "verify_mode": inp.verify_mode,
-            },
+            parsed_result=_enriched_pr(
+                inp,
+                sku=sku,
+                old_price=old_f,
+                new_price=new_f,
+                page_status="success",
+                page_message=ok_msg,
+                operation_result="saved",
+            ),
             evidence_paths=paths,
             error_code=None,
             error_message=None,
         )
+
+    def _flow_list_detail(
+        self,
+        page,
+        evidence_dir: Path,
+        paths: list[str],
+        inp: RpaExecutionInput,
+        sku: str,
+        tp: float,
+        cp: float,
+    ) -> RpaExecutionOutput:
+        base = _base_list_detail()
+        fm = _norm_list_detail_failure_mode(settings.RPA_LIST_DETAIL_FORCE_FAILURE_MODE)
+        q = urlencode(
+            {
+                "sku": sku,
+                "current_price": f"{cp:.4f}",
+                "target_price": f"{tp:.4f}",
+                "failure_mode": fm,
+            }
+        )
+        hub = f"{base}/api/v1/internal/rpa-sandbox/admin-like?{q}"
+        page.goto(hub, wait_until="domcontentloaded")
+        p1 = _screenshot(page, evidence_dir / "01_enter_backend.png")
+        if p1:
+            paths.append(p1)
+
+        page.click('[data-testid="nav-to-catalog"]')
+        page.wait_for_selector('[data-testid="catalog-root"]')
+        page.wait_for_load_state("domcontentloaded")
+
+        page.locator("#catalog-search").fill(sku)
+        page.click('[data-testid="catalog-search-btn"]')
+        page.wait_for_selector(
+            '#list-empty[data-visible="1"], #catalog-table-wrap[data-visible="1"]',
+            timeout=max(3000, int((settings.RPA_BROWSER_TIMEOUT_S or 30) * 1000)),
+        )
+
+        if page.locator('#list-empty[data-visible="1"]').is_visible():
+            etxt = (page.locator("#list-empty").inner_text() or "").strip()
+            p99 = _screenshot(page, evidence_dir / "99_failure.png")
+            if p99:
+                paths.append(p99)
+            return RpaExecutionOutput(
+                success=False,
+                result_summary=etxt or "list empty",
+                parsed_result=_enriched_pr(
+                    inp,
+                    sku=sku,
+                    old_price=cp,
+                    new_price=tp,
+                    page_status="error",
+                    page_message=etxt,
+                    operation_result="list_search_failed",
+                ),
+                evidence_paths=paths,
+                error_code="rpa_list_sku_missing_in_list",
+                error_message=etxt or "列表无匹配商品",
+            )
+
+        p2 = _screenshot(page, evidence_dir / "02_list_after_search.png")
+        if p2:
+            paths.append(p2)
+        page.wait_for_timeout(250)
+        p3 = _screenshot(page, evidence_dir / "03_product_row_ready.png")
+        if p3:
+            paths.append(p3)
+
+        self._click_open_detail_with_retry(page)
+
+        page.wait_for_selector(
+            '[data-testid="detail-product-root"], [data-testid="detail-not-found"]',
+            timeout=max(5000, int((settings.RPA_BROWSER_TIMEOUT_S or 30) * 1000)),
+        )
+        if page.locator('[data-testid="detail-not-found"]').is_visible():
+            msg = (page.locator('[data-testid="detail-error-msg"]').inner_text() or "").strip()
+            p99 = _screenshot(page, evidence_dir / "99_failure.png")
+            if p99:
+                paths.append(p99)
+            return RpaExecutionOutput(
+                success=False,
+                result_summary=msg or "detail not found",
+                parsed_result=_enriched_pr(
+                    inp,
+                    sku=sku,
+                    old_price=cp,
+                    new_price=tp,
+                    page_status="error",
+                    page_message=msg,
+                    operation_result="detail_not_found",
+                ),
+                evidence_paths=paths,
+                error_code="rpa_list_detail_page_not_found",
+                error_message=msg or "详情页无法打开（受控 detail_page_not_found）",
+            )
+
+        page.wait_for_selector('[data-testid="detail-product-root"]')
+        p4 = _screenshot(page, evidence_dir / "04_detail_before_save.png")
+        if p4:
+            paths.append(p4)
+
+        page.locator('[data-testid="detail-new-price"]').fill(str(tp))
+        save_btn = page.locator('[data-testid="detail-save-btn"]')
+
+        if fm == "save_button_disabled":
+            p99 = _screenshot(page, evidence_dir / "99_failure.png")
+            if p99:
+                paths.append(p99)
+            return RpaExecutionOutput(
+                success=False,
+                result_summary="保存按钮不可用（save_button_disabled）",
+                parsed_result=_enriched_pr(
+                    inp,
+                    sku=sku,
+                    old_price=cp,
+                    new_price=tp,
+                    page_status="blocked",
+                    page_message="save disabled",
+                    operation_result="save_blocked",
+                ),
+                evidence_paths=paths,
+                error_code="rpa_list_save_button_disabled",
+                error_message="详情页保存不可用（受控 save_button_disabled）",
+            )
+
+        self._click_save_with_retry(page, save_btn)
+
+        page.wait_for_selector(
+            '#detail-result[data-status="success"], #detail-result[data-status="error"]',
+            timeout=max(5000, int((settings.RPA_BROWSER_TIMEOUT_S or 30) * 1000)),
+        )
+        res = page.locator("#detail-result")
+        status = res.get_attribute("data-status") or ""
+        text = (res.inner_text() or "").strip()
+
+        if status == "error":
+            p99 = _screenshot(page, evidence_dir / "99_failure.png")
+            if p99:
+                paths.append(p99)
+            return RpaExecutionOutput(
+                success=False,
+                result_summary=text or "save error",
+                parsed_result=_enriched_pr(
+                    inp,
+                    sku=sku,
+                    old_price=cp,
+                    new_price=tp,
+                    page_status="error",
+                    page_message=text,
+                    operation_result="save_failed",
+                ),
+                evidence_paths=paths,
+                error_code="rpa_list_save_error",
+                error_message=text or "保存失败（受控 save_error）",
+            )
+
+        p5 = _screenshot(page, evidence_dir / "05_after_save.png")
+        if p5:
+            paths.append(p5)
+
+        new_p = res.get_attribute("data-new-price")
+        old_p = res.get_attribute("data-old-price")
+        try:
+            new_f = float(new_p) if new_p is not None else tp
+        except (TypeError, ValueError):
+            new_f = tp
+        try:
+            old_f = float(old_p) if old_p is not None else cp
+        except (TypeError, ValueError):
+            old_f = cp
+
+        return RpaExecutionOutput(
+            success=True,
+            result_summary=f"Playwright list_detail OK: {sku} {old_f} -> {new_f}",
+            parsed_result=_enriched_pr(
+                inp,
+                sku=sku,
+                old_price=old_f,
+                new_price=new_f,
+                page_status="success",
+                page_message=text,
+                operation_result=res.get_attribute("data-operation-result") or "saved",
+            ),
+            evidence_paths=paths,
+            error_code=None,
+            error_message=None,
+        )
+
+    @staticmethod
+    def _click_open_detail_with_retry(page) -> None:
+        link = page.locator('[data-testid="open-product-detail"]').first
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                link.click(timeout=8000)
+                return
+            except Exception as exc:
+                last_exc = exc
+                page.wait_for_timeout(400)
+        raise last_exc if last_exc else RuntimeError("open detail click failed")
+
+    @staticmethod
+    def _click_save_with_retry(page, save_btn) -> None:
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                save_btn.click(timeout=8000)
+                return
+            except Exception as exc:
+                last_exc = exc
+                page.wait_for_timeout(400)
+                save_btn = page.locator('[data-testid="detail-save-btn"]')
+        raise last_exc if last_exc else RuntimeError("save click failed")
 
 
 def _tiny_failure_png(evidence_dir: Path, paths: list[str]) -> None:
