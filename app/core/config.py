@@ -56,8 +56,9 @@ class Settings(BaseSettings):
     USE_SQLITE: bool = False
 
     # Dev-only switch for product.query_sku_status executor path.
-    # Allowed: mock | api (default: mock)
+    # Allowed: mock | api | rpa (rpa requires PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY=true)
     PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE: str = "mock"
+    PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY: bool = False
 
     # Dev-only default platform for product.query_sku_status.
     # Allowed: mock | woo | odoo | sandbox (default: sandbox)
@@ -150,6 +151,7 @@ class Settings(BaseSettings):
     RPA_REAL_ADMIN_DETAIL_SKU_SELECTOR: str = ""
     RPA_REAL_ADMIN_DETAIL_STATUS_SELECTOR: str = ""
     RPA_REAL_ADMIN_DETAIL_MESSAGE_SELECTOR: str = ""
+    RPA_REAL_ADMIN_DETAIL_PRODUCT_NAME_SELECTOR: str = ""
     # api_then_rpa_verify 比对用；空则回退为请求 target_price
     RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR: str = ""
     # Session injection (no password automation): Cookie header value or JSON headers.

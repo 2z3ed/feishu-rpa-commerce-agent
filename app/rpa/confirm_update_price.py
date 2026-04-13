@@ -11,6 +11,8 @@ from app.rpa.local_fake_runner import LocalFakeRpaRunner
 from app.rpa.schema import RpaExecutionInput, RpaRunner
 from app.rpa.target_readiness import RpaTargetReadinessResult, evaluate_rpa_target_readiness, norm_rpa_target_profile
 
+ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED = "rpa_real_admin_api_then_rpa_verify_not_supported"
+
 INTENT_PRODUCT_UPDATE_PRICE = "product.update_price"
 
 
@@ -135,6 +137,9 @@ def _api_then_rpa_verify_meta(
     operation_result: str,
     verify_passed: bool,
     verify_reason: str,
+    verify_error_code: str | None,
+    expected_target_price: float | None,
+    compared_price: float | None,
     rpa_verification_skipped: bool,
 ) -> dict:
     runner_label = (
@@ -164,6 +169,9 @@ def _api_then_rpa_verify_meta(
         "operation_result": operation_result,
         "verify_passed": verify_passed,
         "verify_reason": verify_reason,
+        "verify_error_code": verify_error_code,
+        "expected_target_price": expected_target_price,
+        "compared_price": compared_price,
         "rpa_verification_skipped": rpa_verification_skipped,
         "rpa_backend_segment": rpa_backend,
     }
@@ -208,21 +216,18 @@ def _compare_api_page_readback(
     target_price: float,
     pr: dict,
 ) -> tuple[bool, str]:
-    ps = (pr.get("page_sku") or pr.get("sku") or "").strip().upper()
-    if ps != sku_expected:
-        return False, f"sku_mismatch expected={sku_expected} page={ps!r}"
+    page_sku = (pr.get("page_sku") or pr.get("sku") or "").strip().upper()
+    target_hit = pr.get("target_sku_hit")
+    if target_hit is None:
+        target_hit = bool(page_sku) and page_sku == sku_expected
+    if not bool(target_hit):
+        return False, f"sku_mismatch expected={sku_expected} page={page_sku!r}"
     try:
         pc = float(pr.get("page_current_price", pr.get("old_price")))
     except (TypeError, ValueError):
         return False, "page_current_price_unparseable"
     if abs(pc - api_price_after) > 0.009:
         return False, f"price_mismatch api_after={api_price_after} page_current={pc}"
-    try:
-        pn = float(pr.get("page_new_price_field", pr.get("new_price", target_price)))
-    except (TypeError, ValueError):
-        return False, "page_new_price_unparseable"
-    if abs(pn - float(target_price)) > 0.009:
-        return False, f"target_field_mismatch expected={target_price} page_field={pn}"
     return True, "ok"
 
 
@@ -265,11 +270,18 @@ def run_confirm_update_price_rpa(
     )
     runner = get_update_price_runner()
     backend_obs = getattr(runner, "rpa_backend_obs_id", "rpa_local_fake")
+    log_step(confirm_task_id, "readonly_read_started", "processing", f"sku={sku_u_pre} flow=confirm_rpa")
     out = runner.run(inp)
     vm_str = str(vm)
     readonly_real_admin = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None)) == "real_admin_prepared"
 
     if not out.success:
+        log_step(
+            confirm_task_id,
+            "readonly_read_failed",
+            "failed",
+            f"error_code={out.error_code} msg={(out.error_message or '')[:400]}",
+        )
         fail_meta = _rpa_observability_meta(
             runner=runner,
             evidence_dir=evidence_dir,
@@ -290,19 +302,37 @@ def run_confirm_update_price_rpa(
     dry_run = bool(pr.get("dry_run", inp.dry_run))
 
     if readonly_real_admin:
+        log_step(confirm_task_id, "readonly_read_succeeded", "success", f"evidence_count={len(out.evidence_paths or [])}")
+        verify_passed = bool(pr.get("target_sku_hit", False) and pr.get("detail_loaded", False))
+        verify_reason = "ok" if verify_passed else "readonly_contract_not_ready"
+        verify_error_code = None if verify_passed else "verify_compare_failed"
         try:
-            opc = float(pr.get("page_current_price", pr.get("old_price")))
-            if opc != opc:
-                opc = 0.0
+            compared_price = float(pr.get("page_current_price", pr.get("old_price")))
+            if compared_price != compared_price:
+                compared_price = 0.0
         except (TypeError, ValueError):
-            opc = 0.0
+            compared_price = 0.0
         legacy = {
             "sku": sku_u,
-            "old_price": opc,
+            "old_price": compared_price,
             "new_price": float(target_price),
-            "status": "success",
+            "status": "success" if verify_passed else "failed",
             "platform": pr.get("platform", platform),
-            "readonly_real_admin_navigation": True,
+            "product_name": pr.get("product_name"),
+            "page_current_price": pr.get("page_current_price"),
+            "page_status": pr.get("page_status"),
+            "page_message": pr.get("page_message"),
+            "target_sku_hit": bool(pr.get("target_sku_hit", False)),
+            "detail_loaded": bool(pr.get("detail_loaded", False)),
+            "profile": pr.get("profile") or "real_admin_prepared",
+            "read_source": pr.get("read_source") or "browser_real",
+            "evidence_count": int(pr.get("evidence_count", len(out.evidence_paths or []))),
+            "verify_passed": verify_passed,
+            "verify_reason": verify_reason,
+            "verify_error_code": verify_error_code,
+            "expected_target_price": float(target_price),
+            "compared_price": compared_price,
+            "api_price_after_update": None,
         }
         meta = _rpa_observability_meta(
             runner=runner,
@@ -314,6 +344,20 @@ def run_confirm_update_price_rpa(
         )
         legacy["_rpa_meta"] = meta
         legacy["rpa_evidence_paths"] = out.evidence_paths
+        log_step(
+            confirm_task_id,
+            "verification_result_recorded",
+            "success" if verify_passed else "failed",
+            f"verify_passed={verify_passed} reason={verify_reason}",
+        )
+        if not verify_passed:
+            return None, {
+                "error": f"页面核验未通过：{verify_reason}",
+                "error_code": verify_error_code,
+                "evidence_paths": out.evidence_paths,
+                "_rpa_meta": meta,
+                "parsed_result": pr,
+            }
         return legacy, None
 
     if dry_run:
@@ -381,6 +425,41 @@ def run_confirm_update_price_api_then_rpa_verify(
         return None, pf
     sku_u = sku.strip().upper()
     tp_f = float(target_price)
+    profile = norm_rpa_target_profile(getattr(settings, "RPA_TARGET_PROFILE", None))
+    if profile == "real_admin_prepared":
+        log_step(
+            confirm_task_id,
+            "verification_result_recorded",
+            "failed",
+            "verify_passed=false reason=api_then_rpa_verify_not_supported_in_real_admin_prepared",
+        )
+        meta = _api_then_rpa_verify_meta(
+            runner=None,
+            evidence_dir=evidence_dir,
+            evidence_paths=[],
+            verify_mode=str(vm),
+            platform=platform,
+            sku=sku_u,
+            old_price=None,
+            target_price=tp_f,
+            api_result=None,
+            api_price_after_update=None,
+            page_status="skipped",
+            page_message="real_admin_prepared_readonly_only",
+            operation_result="api_then_rpa_verify_not_supported",
+            verify_passed=False,
+            verify_reason="real_admin_prepared_readonly_only",
+            verify_error_code=ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED,
+            expected_target_price=tp_f,
+            compared_price=None,
+            rpa_verification_skipped=True,
+        )
+        return None, {
+            "error": "real_admin_prepared 当前仅支持只读核验，不支持 api_then_rpa_verify 写入链路",
+            "error_code": ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED,
+            "evidence_paths": [],
+            "_rpa_meta": meta,
+        }
 
     log_step(
         confirm_task_id,
@@ -418,6 +497,9 @@ def run_confirm_update_price_api_then_rpa_verify(
             operation_result="api_failed",
             verify_passed=False,
             verify_reason="api_update_sku_not_found",
+            verify_error_code="api_update_sku_not_found",
+            expected_target_price=tp_f,
+            compared_price=None,
             rpa_verification_skipped=True,
         )
         return None, {
@@ -500,6 +582,9 @@ def run_confirm_update_price_api_then_rpa_verify(
             operation_result="rpa_navigation_failed",
             verify_passed=False,
             verify_reason=str(out.error_code or "rpa_failed"),
+            verify_error_code=str(out.error_code or "rpa_failed"),
+            expected_target_price=tp_f,
+            compared_price=None,
             rpa_verification_skipped=False,
         )
         return None, {
@@ -551,6 +636,9 @@ def run_confirm_update_price_api_then_rpa_verify(
             operation_result=operation_result or "readonly_verify",
             verify_passed=False,
             verify_reason=reason,
+            verify_error_code="verify_compare_failed",
+            expected_target_price=tp_f,
+            compared_price=float(pr.get("page_current_price", api_price_after)),
             rpa_verification_skipped=False,
         )
         return None, {
@@ -590,6 +678,9 @@ def run_confirm_update_price_api_then_rpa_verify(
         operation_result=operation_result,
         verify_passed=True,
         verify_reason=reason,
+        verify_error_code=None,
+        expected_target_price=tp_f,
+        compared_price=float(pr.get("page_current_price", api_price_after)),
         rpa_verification_skipped=False,
     )
     legacy["_rpa_meta"] = meta

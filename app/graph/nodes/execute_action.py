@@ -15,6 +15,7 @@ from app.rpa.confirm_update_price import (
     run_confirm_update_price_api_then_rpa_verify,
     run_confirm_update_price_rpa,
 )
+from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.utils.task_logger import log_step
 
 
@@ -88,7 +89,40 @@ def execute_action(state: dict) -> dict:
                 state["fallback_target"] = "pending"
                 state["final_backend"] = "pending"
                 state["dry_run_failure"] = "pending"
-            result = execute_product_query_sku_status(executor, slots, execution_mode)
+            if execution_mode == "rpa":
+                task_trace = (state.get("source_message_id") or "").strip() or task_id
+                rpa_result, rpa_err = run_query_sku_status_real_admin_readonly(
+                    task_id=task_id,
+                    trace_id=task_trace,
+                    sku=str(slots.get("sku") or ""),
+                )
+                if rpa_err:
+                    meta = rpa_err.get("_rpa_meta") or {}
+                    state["error_message"] = str(rpa_err.get("error") or "readonly query failed")
+                    state["status"] = "failed"
+                    state["result_summary"] = f"执行失败：{state['error_message']}"
+                    state["execution_backend"] = meta.get("execution_backend", "rpa_browser_real")
+                    state["selected_backend"] = meta.get("selected_backend", state["execution_backend"])
+                    state["final_backend"] = meta.get("final_backend", state["execution_backend"])
+                    state["client_profile"] = "rpa_runner"
+                    state["rpa_runner"] = meta.get("rpa_runner", "browser_real")
+                    state["verify_mode"] = str(meta.get("verify_mode", "basic"))
+                    state["evidence_count"] = int(meta.get("evidence_count", 0))
+                    state["platform"] = meta.get("platform", "woo")
+                    state["backend_selection_reason"] = str(rpa_err.get("error_code") or "rpa_query_failed")
+                    return state
+                result = (rpa_result or {}).get("query_result", {})
+                rpa_meta = (rpa_result or {}).get("_rpa_meta", {})
+                state["execution_backend"] = rpa_meta.get("execution_backend", "rpa_browser_real")
+                state["selected_backend"] = rpa_meta.get("selected_backend", state["execution_backend"])
+                state["final_backend"] = rpa_meta.get("final_backend", state["execution_backend"])
+                state["client_profile"] = "rpa_runner"
+                state["rpa_runner"] = rpa_meta.get("rpa_runner", "browser_real")
+                state["verify_mode"] = str(rpa_meta.get("verify_mode", "basic"))
+                state["evidence_count"] = int(rpa_meta.get("evidence_count", 0))
+                state["backend_selection_reason"] = "real_admin_prepared_readonly_query"
+            else:
+                result = execute_product_query_sku_status(executor, slots, execution_mode)
             if execution_mode == "api":
                 state["execution_backend"] = getattr(executor, "get_selected_backend", lambda: "sandbox_http_client")()
                 state["client_profile"] = getattr(executor, "get_backend_profile", lambda: "sandbox_http_client")()

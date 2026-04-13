@@ -1,6 +1,7 @@
 from app.executors.product_executor import (
     EXECUTION_MODE_API,
     EXECUTION_MODE_MOCK,
+    EXECUTION_MODE_RPA,
     get_product_executor,
     resolve_query_platform,
     resolve_execution_mode,
@@ -89,24 +90,36 @@ def test_query_sku_api_mode_exception_path():
 
 def test_query_sku_supports_api_mode_switch():
     old_value = settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE
+    old_rpa = settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY
     try:
         settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = "mock"
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = False
         assert resolve_execution_mode("product.query_sku_status", "api") == EXECUTION_MODE_API
         assert resolve_execution_mode("product.query_sku_status", "mock") == EXECUTION_MODE_MOCK
         assert resolve_execution_mode("product.query_sku_status", "rpa") == EXECUTION_MODE_MOCK
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = True
+        assert resolve_execution_mode("product.query_sku_status", "rpa") == EXECUTION_MODE_RPA
     finally:
         settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = old_value
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = old_rpa
 
 
 def test_query_sku_default_mode_uses_dev_config():
     old_value = settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE
+    old_rpa = settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY
     try:
         settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = "api"
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = True
         assert resolve_execution_mode("product.query_sku_status", None) == EXECUTION_MODE_API
+        settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = "rpa"
+        assert resolve_execution_mode("product.query_sku_status", None) == EXECUTION_MODE_RPA
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = False
+        assert resolve_execution_mode("product.query_sku_status", None) == EXECUTION_MODE_MOCK
         settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = "invalid"
         assert resolve_execution_mode("product.query_sku_status", None) == EXECUTION_MODE_MOCK
     finally:
         settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE = old_value
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = old_rpa
 
 
 def test_query_sku_default_platform_uses_dev_config():
@@ -640,3 +653,58 @@ def test_update_price_stays_mock_mode():
     assert result["execution_mode"] == "mock"
     assert result["status"] == "awaiting_confirmation"
     assert "请回复：确认执行 TASK-MODE-KEEP-MOCK" in result["result_summary"]
+
+
+def test_query_sku_rpa_mode_dispatches_real_admin_bridge(monkeypatch):
+    old_enable = settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY
+    try:
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = True
+
+        def fake_rpa_query(*, task_id: str, trace_id: str, sku: str):
+            assert task_id == "TASK-QUERY-RPA-1"
+            assert sku == "A001"
+            return (
+                {
+                    "query_result": {
+                        "sku": "A001",
+                        "product_name": "Mirror A001",
+                        "status": "ok",
+                        "inventory": 9,
+                        "price": 59.9,
+                        "platform": "woo",
+                        "read_source": "browser_real",
+                        "profile": "real_admin_prepared",
+                        "detail_loaded": True,
+                        "target_sku_hit": True,
+                        "evidence_count": 3,
+                    },
+                    "_rpa_meta": {
+                        "execution_backend": "rpa_browser_real",
+                        "selected_backend": "rpa_browser_real",
+                        "final_backend": "rpa_browser_real",
+                        "rpa_runner": "browser_real",
+                        "verify_mode": "basic",
+                        "evidence_count": 3,
+                        "platform": "woo",
+                    },
+                },
+                None,
+            )
+
+        monkeypatch.setattr("app.graph.nodes.execute_action.run_query_sku_status_real_admin_readonly", fake_rpa_query)
+        state = {
+            "intent_code": "product.query_sku_status",
+            "slots": {"sku": "A001"},
+            "execution_mode": "rpa",
+            "task_id": "TASK-QUERY-RPA-1",
+            "status": "processing",
+        }
+        result = execute_action(state)
+        assert result["status"] == "succeeded"
+        assert result["execution_mode"] == "rpa"
+        assert result["execution_backend"] == "rpa_browser_real"
+        assert result["rpa_runner"] == "browser_real"
+        assert result["evidence_count"] == 3
+        assert result["platform"] == "woo"
+    finally:
+        settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = old_enable

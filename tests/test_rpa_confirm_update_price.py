@@ -10,11 +10,13 @@ from app.rpa.schema import RpaExecutionOutput
 from app.graph.nodes import execute_action
 from app.repositories.product_repo import product_repo
 from app.rpa.confirm_update_price import (
+    ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED,
     run_confirm_update_price_api_then_rpa_verify,
     run_confirm_update_price_rpa,
 )
 from app.rpa.local_fake_runner import LocalFakeRpaRunner
 from app.rpa.schema import RpaExecutionInput
+from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 
 
 def test_rpa_execution_io_models_roundtrip():
@@ -83,7 +85,9 @@ def test_local_fake_runner_force_failure(tmp_path):
 
 
 def test_run_confirm_update_price_rpa_success(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", False)
@@ -104,7 +108,9 @@ def test_run_confirm_update_price_rpa_success(monkeypatch, tmp_path):
 
 
 def test_run_confirm_update_price_rpa_forced_fail(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", True)
@@ -195,7 +201,9 @@ def test_execute_action_confirm_failure_merges_rpa_meta(monkeypatch):
 
 
 def test_run_confirm_update_price_rpa_failure_includes_meta(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_FAKE_RUNNER_FORCE_FAILURE", True)
@@ -550,6 +558,7 @@ def test_run_confirm_update_price_api_then_rpa_verify_success_local_fake(monkeyp
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_API_THEN_RPA_VERIFY_FORCE_PAGE_MISMATCH", False)
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     orig = float(product_repo.query_sku_status("A001", "mock")["price"])
     try:
         legacy, err = run_confirm_update_price_api_then_rpa_verify(
@@ -565,6 +574,7 @@ def test_run_confirm_update_price_api_then_rpa_verify_success_local_fake(monkeyp
         meta = legacy["_rpa_meta"]
         assert meta["execution_mode"] == "api_then_rpa_verify"
         assert meta["verify_passed"] is True
+        assert meta["expected_target_price"] == 39.9
         assert float(product_repo.query_sku_status("A001", "mock")["price"]) == 39.9
     finally:
         product_repo.update_price("A001", orig, "mock")
@@ -576,6 +586,7 @@ def test_run_confirm_update_price_api_then_rpa_verify_force_mismatch(monkeypatch
         lambda *a, **k: None,
     )
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     monkeypatch.setattr(settings, "RPA_API_THEN_RPA_VERIFY_FORCE_PAGE_MISMATCH", True)
     orig = float(product_repo.query_sku_status("A001", "mock")["price"])
@@ -601,6 +612,7 @@ def test_run_confirm_update_price_api_then_rpa_verify_api_missing_sku(monkeypatc
         lambda *a, **k: None,
     )
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
     legacy, err = run_confirm_update_price_api_then_rpa_verify(
         confirm_task_id="TASK-AV-API",
@@ -683,3 +695,188 @@ def test_execute_action_confirm_api_then_rpa_verify_fail_backend_reason(monkeypa
     out = execute_action.execute_action(state)
     assert out["status"] == "failed"
     assert out["backend_selection_reason"] == "api_then_rpa_verify_failed"
+
+
+def test_query_readonly_bridge_returns_stable_read_contract(monkeypatch):
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr("app.rpa.query_sku_status.log_step", lambda *a, **k: None)
+
+    class _Runner:
+        runner_name = "browser_real"
+
+        def run(self, inp):
+            return RpaExecutionOutput(
+                success=True,
+                result_summary="ok",
+                parsed_result={
+                    "sku": "A001",
+                    "product_name": "Mirror Name",
+                    "page_current_price": 59.9,
+                    "page_status": "ok",
+                    "page_message": "loaded",
+                    "target_sku_hit": True,
+                    "detail_loaded": True,
+                    "read_source": "browser_real",
+                    "profile": "real_admin_prepared",
+                    "evidence_count": 2,
+                },
+                evidence_paths=["a.png", "b.png"],
+                error_code=None,
+                error_message=None,
+            )
+
+    monkeypatch.setattr("app.rpa.query_sku_status.get_update_price_runner", lambda force_failure=False: _Runner())
+    out, err = run_query_sku_status_real_admin_readonly(task_id="TASK-Q-1", trace_id="t", sku="A001")
+    assert err is None
+    qr = out["query_result"]
+    for key in (
+        "sku",
+        "product_name",
+        "page_status",
+        "page_message",
+        "target_sku_hit",
+        "detail_loaded",
+        "read_source",
+        "profile",
+        "evidence_count",
+    ):
+        assert key in qr
+
+
+def test_query_readonly_bridge_keeps_failure_taxonomy(monkeypatch):
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr("app.rpa.query_sku_status.log_step", lambda *a, **k: None)
+
+    class _Runner:
+        runner_name = "browser_real"
+
+        def run(self, inp):
+            return RpaExecutionOutput(
+                success=False,
+                result_summary="detail selector missing",
+                parsed_result={"detail_loaded": True, "target_sku_hit": False},
+                evidence_paths=["f.png"],
+                error_code="rpa_real_admin_detail_selector_missing",
+                error_message="selector missing",
+            )
+
+    monkeypatch.setattr("app.rpa.query_sku_status.get_update_price_runner", lambda force_failure=False: _Runner())
+    out, err = run_query_sku_status_real_admin_readonly(task_id="TASK-Q-2", trace_id="t", sku="A001")
+    assert out is None
+    assert err is not None
+    assert err["error_code"] == "rpa_real_admin_detail_selector_missing"
+
+
+def test_confirm_rpa_real_admin_readonly_contract_uses_shared_taxonomy(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "browser_real")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
+
+    class _Runner:
+        runner_name = "browser_real"
+        rpa_backend_obs_id = "rpa_browser_real"
+
+        def run(self, inp):
+            return RpaExecutionOutput(
+                success=True,
+                result_summary="readonly ok",
+                parsed_result={
+                    "sku": "A001",
+                    "product_name": "Mirror Name",
+                    "page_current_price": 59.9,
+                    "page_status": "loaded",
+                    "page_message": "real_admin_readback_ok",
+                    "target_sku_hit": True,
+                    "detail_loaded": True,
+                    "profile": "real_admin_prepared",
+                    "read_source": "browser_real",
+                    "evidence_count": 3,
+                    "platform": "woo",
+                },
+                evidence_paths=["00_context_prepared.png", "01_home_loaded.png", "03_detail_readback.png"],
+                error_code=None,
+                error_message=None,
+            )
+
+    monkeypatch.setattr("app.rpa.confirm_update_price.get_update_price_runner", lambda force_failure=None: _Runner())
+    legacy, err = run_confirm_update_price_rpa(
+        confirm_task_id="TASK-C-RPA-1",
+        trace_id="t",
+        sku="A001",
+        target_price=39.9,
+        platform="woo",
+    )
+    assert err is None
+    assert legacy is not None
+    for key in (
+        "sku",
+        "product_name",
+        "page_current_price",
+        "page_status",
+        "page_message",
+        "target_sku_hit",
+        "detail_loaded",
+        "profile",
+        "read_source",
+        "evidence_count",
+        "verify_passed",
+        "verify_reason",
+        "verify_error_code",
+        "expected_target_price",
+        "compared_price",
+        "api_price_after_update",
+    ):
+        assert key in legacy
+    assert legacy["verify_passed"] is True
+
+
+def test_confirm_rpa_real_admin_readonly_failure_taxonomy_passthrough(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "browser_real")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
+
+    class _Runner:
+        runner_name = "browser_real"
+        rpa_backend_obs_id = "rpa_browser_real"
+
+        def run(self, inp):
+            return RpaExecutionOutput(
+                success=False,
+                result_summary="detail selector missing",
+                parsed_result={"detail_loaded": True},
+                evidence_paths=["99_failure.png"],
+                error_code="rpa_real_admin_detail_selector_missing",
+                error_message="selector missing",
+            )
+
+    monkeypatch.setattr("app.rpa.confirm_update_price.get_update_price_runner", lambda force_failure=None: _Runner())
+    legacy, err = run_confirm_update_price_rpa(
+        confirm_task_id="TASK-C-RPA-2",
+        trace_id="t",
+        sku="A001",
+        target_price=39.9,
+        platform="woo",
+    )
+    assert legacy is None
+    assert err is not None
+    assert err["error_code"] == "rpa_real_admin_detail_selector_missing"
+
+
+def test_api_then_rpa_verify_real_admin_prepared_explicitly_restricted(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr(settings, "RPA_EVIDENCE_BASE_DIR", str(tmp_path / "ev"))
+    monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
+
+    legacy, err = run_confirm_update_price_api_then_rpa_verify(
+        confirm_task_id="TASK-AV-RESTRICT",
+        trace_id="t",
+        sku="A001",
+        target_price=39.9,
+        platform="woo",
+    )
+    assert legacy is None
+    assert err is not None
+    assert err["error_code"] == ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED
+    assert err["_rpa_meta"]["rpa_verification_skipped"] is True

@@ -224,10 +224,17 @@ def resolve_execution_mode(intent_code: str, requested_mode: str | None = None) 
     """
     mode = (requested_mode or "").lower().strip()
     if intent_code == "product.query_sku_status":
+        allow_rpa = bool(getattr(settings, "PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY", False))
         if mode in {EXECUTION_MODE_MOCK, EXECUTION_MODE_API}:
             return mode
+        if mode == EXECUTION_MODE_RPA and allow_rpa:
+            return mode
         configured = (settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE or EXECUTION_MODE_MOCK).lower().strip()
-        return configured if configured in {EXECUTION_MODE_MOCK, EXECUTION_MODE_API} else EXECUTION_MODE_MOCK
+        if configured in {EXECUTION_MODE_MOCK, EXECUTION_MODE_API}:
+            return configured
+        if configured == EXECUTION_MODE_RPA and allow_rpa:
+            return configured
+        return EXECUTION_MODE_MOCK
     if intent_code in {"product.update_price", "system.confirm_task"}:
         return EXECUTION_MODE_MOCK
     if not mode:
