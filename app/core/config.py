@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     RPA_REAL_ADMIN_DETAIL_PRODUCT_NAME_SELECTOR: str = ""
     # api_then_rpa_verify 比对用；空则回退为请求 target_price
     RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR: str = ""
+    # P4.5 — real_admin_prepared 写链（RPA 页面写入 + 写后核验）
+    RPA_REAL_ADMIN_DETAIL_SAVE_BUTTON_SELECTOR: str = ""
+    RPA_REAL_ADMIN_DETAIL_SAVE_RESULT_SELECTOR: str = ""
+    # P4.6 — 写后比对容差（默认 0.009；建议与币种/展示格式匹配）
+    RPA_REAL_ADMIN_PRICE_COMPARE_TOLERANCE: float = 0.009
     # Session injection (no password automation): Cookie header value or JSON headers.
     RPA_REAL_ADMIN_SESSION_COOKIE: str = ""
     RPA_REAL_ADMIN_SESSION_HEADERS_JSON: str = ""

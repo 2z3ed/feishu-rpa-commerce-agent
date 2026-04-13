@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 from app.core.config import settings
 from app.core.logging import logger
 from app.rpa.schema import RpaExecutionInput, RpaExecutionOutput, RpaRunner
-from app.rpa.real_admin_readonly import run_real_admin_readonly_flow
+from app.rpa.real_admin_readonly import run_real_admin_readonly_flow, run_real_admin_update_price_flow
 from app.rpa.target_readiness import evaluate_rpa_target_readiness, norm_rpa_target_profile
 
 _ADMIN_FAILURE_MODES = frozenset({"none", "sku_missing", "save_error", "save_disabled"})
@@ -246,7 +246,7 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
                                 error_code="rpa_target_readiness_failed",
                                 error_message=rr.human_error_message(),
                             )
-                        return self._flow_real_admin_prepared_readonly(
+                        return self._flow_real_admin_prepared(
                             page,
                             evidence_dir,
                             paths,
@@ -747,7 +747,7 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
                 save_btn = page.locator('[data-testid="detail-save-btn"]')
         raise last_exc if last_exc else RuntimeError("save click failed")
 
-    def _flow_real_admin_prepared_readonly(
+    def _flow_real_admin_prepared(
         self,
         page,
         evidence_dir: Path,
@@ -760,8 +760,24 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
         *,
         timeout_ms: int,
     ) -> RpaExecutionOutput:
-        """P4.3: shared real_admin readonly flow (used by confirm/query)."""
+        """P4.3/P4.5: shared real_admin flow (readonly or write)."""
         verify_only = bool(inp.params.get("_list_detail_verify_only"))
+        if (inp.intent or "").strip() == "product.update_price" and not verify_only:
+            return run_real_admin_update_price_flow(
+                page=page,
+                evidence_dir=evidence_dir,
+                evidence_paths=paths,
+                task_id=inp.task_id,
+                sku=sku,
+                readiness_snapshot=readiness_snapshot,
+                timeout_ms=timeout_ms,
+                requested_target_price=float(tp),
+                requested_current_price=float(cp),
+                verify_mode=str(inp.verify_mode),
+                dry_run=bool(inp.dry_run),
+                platform=inp.platform,
+                read_source="browser_real",
+            )
         return run_real_admin_readonly_flow(
             page=page,
             evidence_dir=evidence_dir,

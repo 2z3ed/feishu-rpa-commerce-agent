@@ -302,38 +302,85 @@ def run_confirm_update_price_rpa(
     dry_run = bool(pr.get("dry_run", inp.dry_run))
 
     if readonly_real_admin:
-        log_step(confirm_task_id, "readonly_read_succeeded", "success", f"evidence_count={len(out.evidence_paths or [])}")
-        verify_passed = bool(pr.get("target_sku_hit", False) and pr.get("detail_loaded", False))
-        verify_reason = "ok" if verify_passed else "readonly_contract_not_ready"
-        verify_error_code = None if verify_passed else "verify_compare_failed"
-        try:
-            compared_price = float(pr.get("page_current_price", pr.get("old_price")))
-            if compared_price != compared_price:
+        log_step(
+            confirm_task_id,
+            "readonly_read_succeeded",
+            "success",
+            f"evidence_count={len(out.evidence_paths or [])}",
+        )
+        op = str(pr.get("operation_result") or "")
+        # P4.5: write flow returns verify_* fields directly; readonly flow keeps legacy verify logic.
+        if op == "write_update_price" or bool(pr.get("submit_attempted")):
+            verify_passed = bool(pr.get("verify_passed", False))
+            verify_reason = str(pr.get("verify_reason") or ("ok" if verify_passed else "verify_failed"))
+            verify_error_code = pr.get("verify_error_code")
+            try:
+                old_p = float(pr.get("old_price", pr.get("page_current_price", 0.0)))
+            except (TypeError, ValueError):
+                old_p = 0.0
+            try:
+                new_p = float(pr.get("page_current_price_after_save", pr.get("target_price", target_price)))
+            except (TypeError, ValueError):
+                new_p = float(target_price)
+            legacy = {
+                "sku": sku_u,
+                "old_price": old_p,
+                "new_price": new_p,
+                "status": "success" if verify_passed else "failed",
+                "platform": pr.get("platform", platform),
+                "product_name": pr.get("product_name"),
+                "page_current_price": pr.get("page_current_price"),
+                "page_current_price_after_save": pr.get("page_current_price_after_save"),
+                "page_status": pr.get("page_status"),
+                "page_message": pr.get("page_message"),
+                "save_result_text": pr.get("save_result_text"),
+                "input_price": pr.get("input_price"),
+                "submit_attempted": bool(pr.get("submit_attempted", False)),
+                "submit_result": pr.get("submit_result"),
+                "target_sku_hit": bool(pr.get("target_sku_hit", False)),
+                "detail_loaded": bool(pr.get("detail_loaded", False)),
+                "profile": pr.get("profile") or "real_admin_prepared",
+                "read_source": pr.get("read_source") or "browser_real",
+                "evidence_count": int(pr.get("evidence_count", len(out.evidence_paths or []))),
+                "verify_passed": verify_passed,
+                "verify_reason": verify_reason,
+                "verify_error_code": verify_error_code,
+                "expected_target_price": float(target_price),
+                "compared_price": pr.get("page_current_price_after_save"),
+                "api_price_after_update": None,
+            }
+        else:
+            verify_passed = bool(pr.get("target_sku_hit", False) and pr.get("detail_loaded", False))
+            verify_reason = "ok" if verify_passed else "readonly_contract_not_ready"
+            verify_error_code = None if verify_passed else "verify_compare_failed"
+            try:
+                compared_price = float(pr.get("page_current_price", pr.get("old_price")))
+                if compared_price != compared_price:
+                    compared_price = 0.0
+            except (TypeError, ValueError):
                 compared_price = 0.0
-        except (TypeError, ValueError):
-            compared_price = 0.0
-        legacy = {
-            "sku": sku_u,
-            "old_price": compared_price,
-            "new_price": float(target_price),
-            "status": "success" if verify_passed else "failed",
-            "platform": pr.get("platform", platform),
-            "product_name": pr.get("product_name"),
-            "page_current_price": pr.get("page_current_price"),
-            "page_status": pr.get("page_status"),
-            "page_message": pr.get("page_message"),
-            "target_sku_hit": bool(pr.get("target_sku_hit", False)),
-            "detail_loaded": bool(pr.get("detail_loaded", False)),
-            "profile": pr.get("profile") or "real_admin_prepared",
-            "read_source": pr.get("read_source") or "browser_real",
-            "evidence_count": int(pr.get("evidence_count", len(out.evidence_paths or []))),
-            "verify_passed": verify_passed,
-            "verify_reason": verify_reason,
-            "verify_error_code": verify_error_code,
-            "expected_target_price": float(target_price),
-            "compared_price": compared_price,
-            "api_price_after_update": None,
-        }
+            legacy = {
+                "sku": sku_u,
+                "old_price": compared_price,
+                "new_price": float(target_price),
+                "status": "success" if verify_passed else "failed",
+                "platform": pr.get("platform", platform),
+                "product_name": pr.get("product_name"),
+                "page_current_price": pr.get("page_current_price"),
+                "page_status": pr.get("page_status"),
+                "page_message": pr.get("page_message"),
+                "target_sku_hit": bool(pr.get("target_sku_hit", False)),
+                "detail_loaded": bool(pr.get("detail_loaded", False)),
+                "profile": pr.get("profile") or "real_admin_prepared",
+                "read_source": pr.get("read_source") or "browser_real",
+                "evidence_count": int(pr.get("evidence_count", len(out.evidence_paths or []))),
+                "verify_passed": verify_passed,
+                "verify_reason": verify_reason,
+                "verify_error_code": verify_error_code,
+                "expected_target_price": float(target_price),
+                "compared_price": compared_price,
+                "api_price_after_update": None,
+            }
         meta = _rpa_observability_meta(
             runner=runner,
             evidence_dir=evidence_dir,

@@ -1,6 +1,7 @@
 """RPA contract, fake runner, and confirm-phase wiring (dev)."""
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,7 +18,11 @@ from app.rpa.confirm_update_price import (
 from app.rpa.local_fake_runner import LocalFakeRpaRunner
 from app.rpa.schema import RpaExecutionInput
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
+from app.rpa.real_admin_readonly import ERROR_DETAIL_SAVE_BUTTON_DISABLED
 
+import pytest
+
+_HAS_PLAYWRIGHT = importlib.util.find_spec("playwright") is not None
 
 def test_rpa_execution_io_models_roundtrip():
     raw = {
@@ -233,9 +238,12 @@ def test_get_update_price_runner_browser_real(monkeypatch):
 
 def test_internal_rpa_sandbox_page_contains_controls():
     from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    from app.main import app
+    from app.api.v1.internal_rpa_sandbox import router as sandbox_router
 
+    app = FastAPI()
+    app.include_router(sandbox_router, prefix="/api/v1")
     c = TestClient(app)
     r = c.get("/api/v1/internal/rpa-sandbox/update-price?sku=A001&current_price=59.9&target_price=39.9")
     assert r.status_code == 200
@@ -245,6 +253,8 @@ def test_internal_rpa_sandbox_page_contains_controls():
 
 
 def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
+    if not _HAS_PLAYWRIGHT:
+        pytest.skip("playwright not installed in this environment")
     from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
     from app.rpa.schema import RpaExecutionInput
 
@@ -307,9 +317,12 @@ def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
 
 def test_internal_admin_like_catalog_and_detail():
     from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    from app.main import app
+    from app.api.v1.internal_rpa_admin_like import router as admin_like_router
 
+    app = FastAPI()
+    app.include_router(admin_like_router, prefix="/api/v1")
     c = TestClient(app)
     cat = c.get(
         "/api/v1/internal/rpa-sandbox/admin-like/catalog?sku=A001&current_price=59.9&target_price=39.9&failure_mode=none"
@@ -331,9 +344,12 @@ def test_internal_admin_like_catalog_and_detail():
 
 def test_internal_admin_like_hub_and_workbench():
     from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    from app.main import app
+    from app.api.v1.internal_rpa_admin_like import router as admin_like_router
 
+    app = FastAPI()
+    app.include_router(admin_like_router, prefix="/api/v1")
     c = TestClient(app)
     h = c.get("/api/v1/internal/rpa-sandbox/admin-like?sku=A001&failure_mode=none")
     assert h.status_code == 200
@@ -352,9 +368,12 @@ def test_internal_admin_like_hub_and_workbench():
 def test_admin_like_hub_propagates_list_detail_failure_to_catalog_link():
     """list_detail RPA opens hub with detail_page_not_found; catalog href must keep it (P3.3)."""
     from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    from app.main import app
+    from app.api.v1.internal_rpa_admin_like import router as admin_like_router
 
+    app = FastAPI()
+    app.include_router(admin_like_router, prefix="/api/v1")
     c = TestClient(app)
     h = c.get(
         "/api/v1/internal/rpa-sandbox/admin-like?sku=A001&current_price=59.9&target_price=39.9"
@@ -379,9 +398,12 @@ def test_list_detail_request_chain_hub_catalog_detail_detail_page_not_found():
     from urllib.parse import parse_qs, unquote, urlparse
 
     from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    from app.main import app
+    from app.api.v1.internal_rpa_admin_like import router as admin_like_router
 
+    app = FastAPI()
+    app.include_router(admin_like_router, prefix="/api/v1")
     c = TestClient(app)
     hub_path = (
         "/api/v1/internal/rpa-sandbox/admin-like"
@@ -416,6 +438,8 @@ def test_list_detail_request_chain_hub_catalog_detail_detail_page_not_found():
 
 
 def test_playwright_runner_dispatches_admin_like(monkeypatch, tmp_path):
+    if not _HAS_PLAYWRIGHT:
+        pytest.skip("playwright not installed in this environment")
     from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
     from app.rpa.schema import RpaExecutionInput
 
@@ -483,6 +507,8 @@ def test_playwright_runner_dispatches_admin_like(monkeypatch, tmp_path):
 
 
 def test_playwright_runner_dispatches_list_detail(monkeypatch, tmp_path):
+    if not _HAS_PLAYWRIGHT:
+        pytest.skip("playwright not installed in this environment")
     from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
     from app.rpa.schema import RpaExecutionInput
 
@@ -880,3 +906,104 @@ def test_api_then_rpa_verify_real_admin_prepared_explicitly_restricted(monkeypat
     assert err is not None
     assert err["error_code"] == ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED
     assert err["_rpa_meta"]["rpa_verification_skipped"] is True
+
+
+def test_real_admin_write_failure_save_button_disabled(monkeypatch, tmp_path):
+    """
+    P4.5 representative failure:
+    - real_admin_prepared write flow hits disabled save button
+    - returns stable taxonomy error_code
+    """
+    if not _HAS_PLAYWRIGHT:
+        pytest.skip("playwright not installed in this environment")
+    from app.rpa.browser_playwright_runner import PlaywrightUpdatePriceRunner
+
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "real_admin_prepared")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_BASE_URL", "https://example.com")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_HOME_PATH", "/h")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_CATALOG_PATH", "/c")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_DETAIL_PATH_TEMPLATE", "/d/{sku}")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_SKU_SEARCH_PARAM", "sku")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_DETAIL_PRICE_SELECTOR", "[data-testid='real-admin-current-price']")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_CATALOG_EMPTY_SELECTOR", "[data-testid='real-admin-catalog-empty']")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR", "[data-testid='real-admin-new-price']")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_DETAIL_SAVE_BUTTON_SELECTOR", "[data-testid='real-admin-save-btn']")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_DETAIL_SAVE_RESULT_SELECTOR", "[data-testid='real-admin-save-result']")
+    monkeypatch.setattr(settings, "RPA_REAL_ADMIN_SESSION_COOKIE", "s=1")
+    monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
+    monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 5)
+
+    ev = tmp_path / "e"
+    ev.mkdir()
+
+    class Resp:
+        status = 200
+
+    mock_page = MagicMock()
+    mock_page.goto = MagicMock(return_value=Resp())
+    mock_page.wait_for_timeout = MagicMock()
+    mock_page.url = "https://example.com/d/A001"
+    mock_page.screenshot = MagicMock(return_value=None)
+
+    def make_loc(*, enabled=True, visible=True, text=""):
+        loc = MagicMock()
+        loc.first = loc
+        loc.wait_for = MagicMock(return_value=None if visible else RuntimeError("hidden"))
+        loc.is_visible = MagicMock(return_value=visible)
+        loc.is_enabled = MagicMock(return_value=enabled)
+        loc.inner_text = MagicMock(return_value=text)
+        loc.input_value = MagicMock(return_value=text)
+        loc.fill = MagicMock(return_value=None)
+        loc.click = MagicMock(return_value=None)
+        loc.get_attribute = MagicMock(return_value="")
+        return loc
+
+    # Map selectors to locators.
+    price_loc = make_loc(text="59.90")
+    empty_loc = make_loc(visible=False)
+    input_loc = make_loc()
+    save_btn_loc = make_loc(enabled=False)  # disabled
+    save_res_loc = make_loc(visible=False)
+
+    def locator(sel):
+        if "current-price" in sel or "PRICE" in sel or "real-admin-current-price" in sel:
+            return price_loc
+        if "catalog-empty" in sel:
+            return empty_loc
+        if "new-price" in sel:
+            return input_loc
+        if "save-btn" in sel:
+            return save_btn_loc
+        if "save-result" in sel:
+            return save_res_loc
+        return make_loc()
+
+    mock_page.locator = MagicMock(side_effect=locator)
+
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_instance = MagicMock()
+    mock_playwright_instance.chromium.launch.return_value = mock_browser
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_playwright_instance
+    mock_cm.__exit__.return_value = None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=mock_cm):
+        runner = PlaywrightUpdatePriceRunner(runner_name="browser_real", force_failure=False)
+        out = runner.run(
+            RpaExecutionInput(
+                task_id="T1",
+                trace_id="t",
+                intent="product.update_price",
+                platform="woo",
+                params={"sku": "A001", "target_price": 39.9, "current_price": 59.9},
+                timeout_s=30,
+                evidence_dir=str(ev),
+                verify_mode="basic",
+                dry_run=False,
+            )
+        )
+    assert out.success is False
+    assert out.error_code == ERROR_DETAIL_SAVE_BUTTON_DISABLED
