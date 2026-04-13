@@ -16,6 +16,14 @@ _PLATFORM_PROFILE = {
     "mock": {"name_prefix": "Mock网关商品", "inventory_offset": 0},
 }
 
+_CHATWOOT_CONVERSATIONS = [
+    {"conversation_id": 123, "status": "open", "last_message": "您好，请问订单什么时候发货？", "customer_name": "Alice"},
+    {"conversation_id": 122, "status": "pending", "last_message": "可以帮我改收货地址吗？", "customer_name": "Bob"},
+    {"conversation_id": 121, "status": "resolved", "last_message": "收到，谢谢！", "customer_name": "Carol"},
+    {"conversation_id": 120, "status": "open", "last_message": "申请退款，商品有破损。", "customer_name": "David"},
+    {"conversation_id": 119, "status": "pending", "last_message": "物流单号查不到。", "customer_name": "Eve"},
+]
+
 
 def _build_provider_payload(sku_upper: str, platform_key: str):
     if not settings.ENABLE_INTERNAL_SANDBOX_API:
@@ -107,3 +115,10 @@ def provider_woo_query_products(
 @router.get("/provider/odoo/product/{sku}", include_in_schema=False)
 def provider_odoo_query_sku(sku: str, company: str = Query(default="main")):
     return _build_provider_payload(sku.upper(), "odoo")
+
+
+@router.get("/provider/chatwoot/conversations/recent", include_in_schema=False)
+def provider_chatwoot_recent_conversations(limit: int = Query(default=5, ge=1, le=20)):
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+    return {"provider": "chatwoot", "payload": {"conversations": _CHATWOOT_CONVERSATIONS[:limit], "limit": limit}}

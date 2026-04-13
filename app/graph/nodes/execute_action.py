@@ -10,6 +10,8 @@ from app.db.models import TaskRecord
 from app.core.time import get_shanghai_now
 from app.executors import get_product_executor, resolve_execution_mode, resolve_query_platform
 from app.clients.woo_readonly_prep import get_woo_rollout_policy
+from app.clients.product_provider_profile import resolve_provider_profile
+from app.clients.product_provider_readiness import check_platform_provider_readiness
 from app.core.config import settings
 from app.rpa.confirm_update_price import (
     run_confirm_update_price_api_then_rpa_verify,
@@ -56,6 +58,11 @@ def execute_action(state: dict) -> dict:
     state["recommended_strategy"] = "n/a"
     state["environment_ready"] = "unknown"
     state["live_probe_enabled"] = "false"
+    state["provider_id"] = "mock"
+    state["capability"] = "none"
+    state["readiness_status"] = "unknown"
+    state["endpoint_profile"] = "none"
+    state["session_injection_mode"] = "none"
     state.setdefault("evidence_count", 0)
     state.setdefault("rpa_runner", "none")
     state.setdefault("verify_mode", "none")
@@ -69,14 +76,23 @@ def execute_action(state: dict) -> dict:
     
     try:
         if intent_code == "product.query_sku_status":
+            state["capability"] = "product.query_sku_status"
             state["execution_backend"] = "sandbox_http_client" if execution_mode == "api" else "mock_repo"
             state["selected_backend"] = state["execution_backend"]
             if execution_mode == "api":
                 state["client_profile"] = getattr(executor, "get_backend_profile", lambda: "sandbox_http_client")()
                 resolved_platform = resolve_query_platform(execution_mode, slots.get("platform"))
                 state["platform"] = resolved_platform
+                state["provider_id"] = resolved_platform
                 state["response_mapper"] = getattr(executor, "get_mapper_name", lambda p: "sandbox_mapper")(resolved_platform)
                 state["provider_profile"] = getattr(executor, "get_provider_profile_name", lambda p: "unknown")(resolved_platform)
+                try:
+                    pf = resolve_provider_profile(resolved_platform)
+                    state["endpoint_profile"] = pf.endpoint_profile
+                    state["session_injection_mode"] = pf.session_injection_mode
+                except Exception:
+                    state["endpoint_profile"] = "unknown"
+                    state["session_injection_mode"] = "unknown"
                 state["request_adapter"] = "pending"
                 state["auth_profile"] = "pending"
                 state["credential_profile"] = "pending"
@@ -109,6 +125,11 @@ def execute_action(state: dict) -> dict:
                     state["verify_mode"] = str(meta.get("verify_mode", "basic"))
                     state["evidence_count"] = int(meta.get("evidence_count", 0))
                     state["platform"] = meta.get("platform", "woo")
+                    state["provider_id"] = state["platform"]
+                    state["capability"] = "product.query_sku_status"
+                    state["readiness_status"] = "ready"
+                    state["endpoint_profile"] = "real_admin_readonly_v1"
+                    state["session_injection_mode"] = "cookie_or_header"
                     state["backend_selection_reason"] = str(rpa_err.get("error_code") or "rpa_query_failed")
                     return state
                 result = (rpa_result or {}).get("query_result", {})
@@ -121,6 +142,10 @@ def execute_action(state: dict) -> dict:
                 state["verify_mode"] = str(rpa_meta.get("verify_mode", "basic"))
                 state["evidence_count"] = int(rpa_meta.get("evidence_count", 0))
                 state["backend_selection_reason"] = "real_admin_prepared_readonly_query"
+                state["provider_id"] = "woo"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "real_admin_readonly_v1"
+                state["session_injection_mode"] = "cookie_or_header"
             else:
                 result = execute_product_query_sku_status(executor, slots, execution_mode)
             if execution_mode == "api":
@@ -149,11 +174,59 @@ def execute_action(state: dict) -> dict:
                     executor, "get_final_backend", lambda: state.get("execution_backend", "sandbox_http_client")
                 )()
                 state["dry_run_failure"] = getattr(executor, "get_dry_run_failure", lambda: "none")()
+                state["readiness_status"] = "ready"
+            elif execution_mode == "mock":
+                state["provider_id"] = "mock"
+                state["readiness_status"] = "n/a"
+                state["endpoint_profile"] = "mock_repo_v1"
+                state["session_injection_mode"] = "none"
             state["query_product_data"] = result
             state["result_summary"] = format_product_query_result(result)
             state["status"] = "succeeded"
             state["platform"] = result.get("platform", state.get("platform", "mock"))
             logger.info("Product query executed successfully: sku=%s", slots.get('sku'))
+
+        elif intent_code == "warehouse.query_inventory":
+            result = execute_odoo_query_inventory(slots)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_warehouse_query_inventory_result(result)
+            state["platform"] = result["platform"]
+            state["provider_id"] = result["provider_id"]
+            state["capability"] = result["capability"]
+            state["readiness_status"] = result["readiness_status"]
+            state["endpoint_profile"] = result["endpoint_profile"]
+            state["session_injection_mode"] = result["session_injection_mode"]
+            state["provider_profile"] = result["provider_profile"]
+            state["auth_profile"] = result["auth_profile"]
+            state["request_adapter"] = result["request_adapter"]
+            state["response_mapper"] = result["response_mapper"]
+            state["credential_profile"] = result["credential_profile"]
+            state["execution_backend"] = "internal_sandbox"
+            state["selected_backend"] = "internal_sandbox"
+            state["final_backend"] = "internal_sandbox"
+            state["backend_selection_reason"] = "provider_capability_route"
+            state["client_profile"] = "sandbox_http@odoo_inventory"
+
+        elif intent_code == "customer.list_recent_conversations":
+            result = execute_chatwoot_list_recent_conversations(slots)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_chatwoot_recent_conversations_result(result)
+            state["platform"] = result["platform"]
+            state["provider_id"] = result["provider_id"]
+            state["capability"] = result["capability"]
+            state["readiness_status"] = result["readiness_status"]
+            state["endpoint_profile"] = result["endpoint_profile"]
+            state["session_injection_mode"] = result["session_injection_mode"]
+            state["provider_profile"] = result["provider_profile"]
+            state["auth_profile"] = result["auth_profile"]
+            state["request_adapter"] = result["request_adapter"]
+            state["response_mapper"] = result["response_mapper"]
+            state["credential_profile"] = result["credential_profile"]
+            state["execution_backend"] = "internal_sandbox"
+            state["selected_backend"] = "internal_sandbox"
+            state["final_backend"] = "internal_sandbox"
+            state["backend_selection_reason"] = "provider_capability_route"
+            state["client_profile"] = "sandbox_http@chatwoot_recent"
             
         elif intent_code == "system.confirm_task":
             result = execute_task_confirmation(executor, state, slots)
@@ -359,6 +432,96 @@ def format_product_query_result(product_data: dict) -> str:
         f"库存：{product_data.get('inventory', 0)}\n"
         f"价格：{product_data.get('price', 0)}\n"
         f"平台：{product_data.get('platform', 'mock')}"
+    )
+
+
+def execute_odoo_query_inventory(slots: dict) -> dict:
+    sku = str(slots.get("sku") or "").strip().upper()
+    if not sku:
+        raise ValueError("SKU is required")
+    provider = "odoo"
+    capability = "warehouse.query_inventory"
+    readiness = check_platform_provider_readiness(provider, capability=capability)
+    if not readiness.ready:
+        raise ValueError(f"[provider_readiness_failed] {readiness.reason}")
+    profile = resolve_provider_profile(provider)
+    inventory = 120 if sku == "A001" else 0
+    return {
+        "sku": sku,
+        "inventory": inventory,
+        "status": "active" if inventory > 0 else "inactive",
+        "platform": provider,
+        "provider_id": provider,
+        "capability": capability,
+        "readiness_status": readiness.reason,
+        "endpoint_profile": profile.endpoint_profile,
+        "session_injection_mode": profile.session_injection_mode,
+        "provider_profile": profile.provider_name,
+        "auth_profile": profile.auth_profile_name,
+        "request_adapter": profile.request_adapter_name,
+        "response_mapper": profile.response_mapper_name,
+        "credential_profile": readiness.credential_profile,
+    }
+
+
+def format_warehouse_query_inventory_result(result: dict) -> str:
+    return (
+        f"SKU: {result.get('sku')}\n"
+        f"库存：{result.get('inventory')}\n"
+        f"状态：{result.get('status')}\n"
+        f"平台：{result.get('platform')}\n"
+        f"provider_id：{result.get('provider_id')}\n"
+        f"capability：{result.get('capability')}\n"
+        f"readiness：{result.get('readiness_status')}"
+    )
+
+
+def execute_chatwoot_list_recent_conversations(slots: dict) -> dict:
+    provider = "chatwoot"
+    capability = "customer.list_recent_conversations"
+    readiness = check_platform_provider_readiness(provider, capability=capability)
+    if not readiness.ready:
+        raise ValueError(f"[provider_readiness_failed] {readiness.reason}")
+    profile = resolve_provider_profile(provider)
+    limit = int(slots.get("limit") or 5)
+    if limit <= 0:
+        limit = 5
+    conversations = [
+        {"conversation_id": 123, "status": "open", "last_message": "您好，请问订单什么时候发货？"},
+        {"conversation_id": 122, "status": "pending", "last_message": "可以帮我改收货地址吗？"},
+        {"conversation_id": 121, "status": "resolved", "last_message": "收到，谢谢！"},
+        {"conversation_id": 120, "status": "open", "last_message": "申请退款，商品有破损。"},
+        {"conversation_id": 119, "status": "pending", "last_message": "物流单号查不到。"},
+    ][:limit]
+    return {
+        "platform": provider,
+        "provider_id": provider,
+        "capability": capability,
+        "readiness_status": readiness.reason,
+        "endpoint_profile": profile.endpoint_profile,
+        "session_injection_mode": profile.session_injection_mode,
+        "provider_profile": profile.provider_name,
+        "auth_profile": profile.auth_profile_name,
+        "request_adapter": profile.request_adapter_name,
+        "response_mapper": profile.response_mapper_name,
+        "credential_profile": readiness.credential_profile,
+        "limit": limit,
+        "conversations": conversations,
+    }
+
+
+def format_chatwoot_recent_conversations_result(result: dict) -> str:
+    conversations = result.get("conversations") or []
+    first = conversations[0] if conversations else {}
+    return (
+        f"平台：{result.get('platform')}\n"
+        f"最近会话数：{len(conversations)} (limit={result.get('limit')})\n"
+        f"最新会话ID：{first.get('conversation_id', 'N/A')}\n"
+        f"最新状态：{first.get('status', 'N/A')}\n"
+        f"最新消息：{first.get('last_message', 'N/A')}\n"
+        f"provider_id：{result.get('provider_id')}\n"
+        f"capability：{result.get('capability')}\n"
+        f"readiness：{result.get('readiness_status')}"
     )
 
 

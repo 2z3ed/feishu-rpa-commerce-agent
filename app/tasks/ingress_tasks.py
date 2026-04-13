@@ -78,6 +78,11 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         recommended_strategy = result.get("recommended_strategy", "n/a")
         environment_ready = result.get("environment_ready", "unknown")
         live_probe_enabled = result.get("live_probe_enabled", "false")
+        provider_id = result.get("provider_id", "unknown")
+        capability = result.get("capability", "unknown")
+        readiness_status = result.get("readiness_status", "unknown")
+        endpoint_profile = result.get("endpoint_profile", "none")
+        session_injection_mode = result.get("session_injection_mode", "none")
         evidence_count = result.get("evidence_count", 0)
         rpa_runner = result.get("rpa_runner", "none")
         verify_mode = result.get("verify_mode", "none")
@@ -97,6 +102,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 f"fallback_target={fallback_target}, final_backend={final_backend}, "
                 f"dry_run_failure={dry_run_failure}, recommended_strategy={recommended_strategy}, "
                 f"environment_ready={environment_ready}, live_probe_enabled={live_probe_enabled}, "
+                f"provider_id={provider_id}, capability={capability}, readiness_status={readiness_status}, "
+                f"endpoint_profile={endpoint_profile}, session_injection_mode={session_injection_mode}, "
                 f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}"
             ),
         )

@@ -10,10 +10,14 @@ from app.clients.product_auth_provider import get_auth_headers
 from app.clients.product_provider_profile import (
     ProductProviderConfigInvalidError,
     ProductProviderUnsupportedError,
+    list_provider_ids,
     resolve_provider_profile,
     validate_provider_runtime,
 )
-from app.clients.product_provider_readiness import check_query_provider_readiness
+from app.clients.product_provider_readiness import (
+    check_platform_provider_readiness,
+    check_query_provider_readiness,
+)
 from app.clients.product_request_adapter import (
     ProductApiRequestAdapterError,
     build_query_sku_request,
@@ -402,6 +406,21 @@ def test_provider_readiness_odoo_ok():
     assert result.credential_profile == "odoo_credential_profile"
 
 
+def test_provider_registry_includes_multi_platform_connectors():
+    ids = list_provider_ids()
+    assert "woo" in ids
+    assert "odoo" in ids
+    assert "chatwoot" in ids
+
+
+def test_provider_readiness_chatwoot_ok():
+    result = check_platform_provider_readiness("chatwoot", capability="customer.list_recent_conversations")
+    assert result.ready is True
+    assert result.provider_name == "chatwoot"
+    assert result.reason == "ready"
+    assert result.credential_profile == "chatwoot_credential_profile"
+
+
 def test_provider_readiness_unsupported():
     result = check_query_provider_readiness("not_supported")
     assert result.ready is False
@@ -708,3 +727,33 @@ def test_query_sku_rpa_mode_dispatches_real_admin_bridge(monkeypatch):
         assert result["platform"] == "woo"
     finally:
         settings.PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY = old_enable
+
+
+def test_odoo_inventory_route_succeeds_in_task_chain():
+    state = {
+        "intent_code": "warehouse.query_inventory",
+        "slots": {"sku": "A001", "platform": "odoo"},
+        "execution_mode": "api",
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert result["platform"] == "odoo"
+    assert result["provider_id"] == "odoo"
+    assert result["capability"] == "warehouse.query_inventory"
+    assert "库存：" in result["result_summary"]
+
+
+def test_chatwoot_recent_conversations_route_succeeds_in_task_chain():
+    state = {
+        "intent_code": "customer.list_recent_conversations",
+        "slots": {"limit": 3, "platform": "chatwoot"},
+        "execution_mode": "api",
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert result["platform"] == "chatwoot"
+    assert result["provider_id"] == "chatwoot"
+    assert result["capability"] == "customer.list_recent_conversations"
+    assert "最近会话数：3" in result["result_summary"]

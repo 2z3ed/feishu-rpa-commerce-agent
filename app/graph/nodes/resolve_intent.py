@@ -31,6 +31,14 @@ def resolve_intent(state: dict) -> dict:
     
     # Try to match product.query_sku_status
     if not intent_code:
+        intent_code, slots = try_match_warehouse_query_inventory(normalized_text)
+
+    # Try to match chatwoot recent conversations
+    if not intent_code:
+        intent_code, slots = try_match_customer_list_recent_conversations(normalized_text)
+
+    # Try to match product.query_sku_status
+    if not intent_code:
         intent_code, slots = try_match_product_query_sku_status(normalized_text)
     
     # Try to match product.update_price
@@ -97,6 +105,39 @@ def try_match_product_query_sku_status(text: str) -> Tuple[Optional[str], Dict[s
             return 'product.query_sku_status', slots
     
     return None, {}
+
+
+def try_match_warehouse_query_inventory(text: str) -> tuple[str | None, dict]:
+    """Match warehouse.query_inventory for minimal Odoo readonly entry."""
+    inventory_keywords = ["库存", "库存数量"]
+    query_keywords = ["查", "查询", "看", "查看"]
+    has_inventory = any(k in text for k in inventory_keywords)
+    has_query = any(k in text for k in query_keywords)
+    if not (has_inventory and has_query):
+        return None, {}
+    if "odoo" not in text.lower():
+        return None, {}
+
+    sku_match = re.search(r"(?:SKU|商品|产品)?\s*([A-Z][0-9]+)", text, re.IGNORECASE)
+    if not sku_match:
+        return None, {}
+    return "warehouse.query_inventory", {"sku": sku_match.group(1), "platform": "odoo"}
+
+
+def try_match_customer_list_recent_conversations(text: str) -> tuple[str | None, dict]:
+    """Match customer.list_recent_conversations for minimal Chatwoot readonly entry."""
+    if "chatwoot" not in text.lower():
+        return None, {}
+    if "会话" not in text:
+        return None, {}
+    if not any(k in text for k in ("最近", "最新", "列表", "列出", "查", "查询")):
+        return None, {}
+
+    limit_match = re.search(r"(\d+)\s*个", text)
+    limit = int(limit_match.group(1)) if limit_match else 5
+    if limit <= 0:
+        limit = 5
+    return "customer.list_recent_conversations", {"limit": limit, "platform": "chatwoot"}
 
 
 def try_match_confirmation_command(text: str) -> tuple[str | None, dict]:

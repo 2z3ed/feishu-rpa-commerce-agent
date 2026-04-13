@@ -76,6 +76,10 @@ def _normalize_reason(err: Exception) -> str:
 
 
 def check_query_provider_readiness(provider: str) -> ProviderReadinessResult:
+    return check_platform_provider_readiness(provider, capability="product.query_sku_status")
+
+
+def check_platform_provider_readiness(provider: str, *, capability: str) -> ProviderReadinessResult:
     mode = (settings.PRODUCT_QUERY_SKU_DEFAULT_EXECUTION_MODE or "mock").lower().strip()
     base_url = settings.PRODUCT_QUERY_SKU_API_BASE_URL or "internal://sandbox"
     timeout_ms = int(settings.PRODUCT_QUERY_SKU_API_TIMEOUT_MS)
@@ -100,13 +104,22 @@ def check_query_provider_readiness(provider: str) -> ProviderReadinessResult:
         profile = resolve_provider_profile(provider_key)
         validate_provider_runtime(
             profile=profile,
-            intent_code="product.query_sku_status",
+            intent_code=capability,
             base_url=base_url,
             timeout_ms=timeout_ms,
             internal_sandbox_enabled=sandbox_enabled,
         )
-        credential_profile, _, missing = validate_credentials(profile.provider_name)
-        credential_ready = True
+        missing: list[str] = []
+        if profile.provider_name == "chatwoot":
+            credential_profile = "chatwoot_credential_profile"
+            credential_ready = True
+        elif profile.provider_name == "odoo" and capability == "warehouse.query_inventory":
+            # P5.0: inventory readonly via sandbox skeleton; keep credential optional in this path.
+            credential_profile = "odoo_credential_profile"
+            credential_ready = True
+        else:
+            credential_profile, _, missing = validate_credentials(profile.provider_name)
+            credential_ready = True
         sandbox_ready = bool(sandbox_enabled and base_url == "internal://sandbox")
         production_shape_ready = bool(
             profile.provider_name == "woo"

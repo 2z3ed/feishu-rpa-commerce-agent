@@ -18,45 +18,75 @@ class ProductProviderConfigInvalidError(ProductProviderProfileError):
 
 @dataclass(frozen=True)
 class ProductProviderProfile:
+    provider_id: str
     provider_name: str
+    capability: str
     supported_intents: tuple[str, ...]
     default_base_url: str
     default_timeout_ms: int
+    endpoint_profile: str
     auth_profile_name: str
     request_adapter_name: str
     response_mapper_name: str
+    session_injection_mode: str
     supports_internal_sandbox_route: bool
 
 
 _PROFILES: dict[str, ProductProviderProfile] = {
     "sandbox": ProductProviderProfile(
+        provider_id="sandbox",
         provider_name="sandbox",
+        capability="product.query_sku_status",
         supported_intents=("product.query_sku_status",),
         default_base_url="internal://sandbox",
         default_timeout_ms=2000,
+        endpoint_profile="sandbox_sku_v1",
         auth_profile_name="sandbox_auth_profile",
         request_adapter_name="sandbox_request_adapter",
         response_mapper_name="sandbox_mapper",
+        session_injection_mode="header",
         supports_internal_sandbox_route=True,
     ),
     "woo": ProductProviderProfile(
+        provider_id="woo",
         provider_name="woo",
+        capability="product.query_sku_status",
         supported_intents=("product.query_sku_status",),
         default_base_url="internal://sandbox",
         default_timeout_ms=2000,
+        endpoint_profile="woo_products_v3",
         auth_profile_name="woo_auth_profile",
         request_adapter_name="woo_request_adapter",
         response_mapper_name="woo_mapper",
+        session_injection_mode="header_or_query",
         supports_internal_sandbox_route=True,
     ),
     "odoo": ProductProviderProfile(
+        provider_id="odoo",
         provider_name="odoo",
-        supported_intents=("product.query_sku_status",),
+        capability="warehouse.query_inventory",
+        supported_intents=("product.query_sku_status", "warehouse.query_inventory"),
         default_base_url="internal://sandbox",
         default_timeout_ms=2000,
+        endpoint_profile="odoo_product_stock_v1",
         auth_profile_name="odoo_auth_profile",
         request_adapter_name="odoo_request_adapter",
         response_mapper_name="odoo_mapper",
+        session_injection_mode="header",
+        supports_internal_sandbox_route=True,
+    ),
+    "chatwoot": ProductProviderProfile(
+        provider_id="chatwoot",
+        provider_name="chatwoot",
+        capability="customer.list_recent_conversations",
+        supported_intents=("customer.list_recent_conversations",),
+        default_base_url="internal://sandbox",
+        default_timeout_ms=2000,
+        endpoint_profile="chatwoot_recent_conversations_v1",
+        auth_profile_name="chatwoot_auth_profile",
+        request_adapter_name="chatwoot_request_adapter",
+        response_mapper_name="chatwoot_mapper",
+        session_injection_mode="header",
         supports_internal_sandbox_route=True,
     ),
 }
@@ -68,6 +98,11 @@ def resolve_provider_profile(provider: str) -> ProductProviderProfile:
     if not profile:
         raise ProductProviderUnsupportedError(f"unsupported provider: {provider}")
     return profile
+
+
+def list_provider_ids() -> tuple[str, ...]:
+    """Stable provider registry snapshot for tests/diagnostics."""
+    return tuple(sorted(_PROFILES.keys()))
 
 
 def validate_provider_runtime(
