@@ -232,3 +232,57 @@ python script/p53_woo_write_governance_summary.py \
 
 - `unknown` 不是失败重分类，而是“证据不足，不做过度推断”的保守结论。
 - 若样本仅有自由文本且无可映射标签，必须保持 `unknown`，不为降低 unknown 比例而强行归类。
+
+### 15) P5.4 发布门禁脚本（最小工程门禁）
+
+脚本：`script/p54_woo_write_gate_check.py`
+
+用途（只编排与判定）：
+
+- 调用关键回归测试（默认：`tests/test_p53_woo_write_governance_summary.py`）
+- 调用 `p53` 聚合模式
+- 调用 `p53 --task-id` 回放模式
+- 汇总并输出 `status` / `blocking_failures` / `warnings`
+
+说明：门禁脚本不复写治理解析，不复写 `source_mode` / `unknown_reason` 判定，不复写 confirm-only 过滤；这些逻辑统一复用 `p53` 脚本输出。
+
+### 16) P5.4 固定门禁阈值与口径（脚本/文档一致）
+
+固定规则（与 `script/p54_woo_write_gate_check.py` 保持一致）：
+
+- `other_failed_confirms > 0`：**阻断**
+- `unknown_ratio = unknown_confirms / total_confirm_attempts`
+  - `unknown_ratio > 0.2`：**阻断**
+  - `0 < unknown_ratio <= 0.2`：**警告**
+- `blocked_repeat_confirms == 0`：**警告**（覆盖不足提示，不阻断）
+- `invalid_target_confirms > 0`：**警告**（可见但不阻断）
+
+输出分层（固定）：
+
+- `blocking_failures`：必须阻断发布
+- `warnings`：允许人工复核后放行
+
+### 17) 发布前最小执行清单（P5.4）
+
+1. 运行门禁脚本（示例）：
+
+```bash
+source venv/bin/activate
+python script/p54_woo_write_gate_check.py \
+  --base-url "http://127.0.0.1:8000" \
+  --limit 80 \
+  --task-prefix "TASK-" \
+  --recent-limit 20 \
+  --replay-task-id "TASK-NEW-SAMPLE" \
+  --replay-task-id "TASK-LEGACY-SAMPLE"
+```
+
+2. 判定：
+   - `status=fail`：阻断
+   - `status=pass_with_warnings`：按 warning 做人工复核
+   - `status=pass`：通过
+
+3. 人工复核最小流程（warning 场景）：
+   - 按 warning 里的 `task_id` 调 `p53 --task-id` 回放
+   - 判断是否是预期样本（如 invalid target 测试噪音）
+   - 记录复核结论后再决定放行
