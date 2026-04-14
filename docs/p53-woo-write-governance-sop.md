@@ -151,3 +151,84 @@ python script/p53_woo_write_governance_summary.py \
 1. **环境类**：readiness、会话、依赖不可用
 2. **治理类**：重复 confirm / target 无效 / 样本口径不一致
 3. **写流类**：页面写入与写后核验失败（非治理拦截）
+
+### 11) P5.3 第三轮：历史样本兼容读取（固定优先级）
+
+统一优先级（不可交换）：
+
+1. `parsed_result`（new schema 单一事实源）
+2. `action_executed.detail`
+3. `result_summary / error_message`
+4. `unknown`
+
+执行原则：
+
+- 新样本优先按 `parsed_result` 读取，不回退到旧口径覆盖。
+- 旧样本只做兼容解读，不回填数据库，不补造历史字段。
+- 证据不足直接归 `unknown`，并输出稳定 `unknown_reason`。
+
+`unknown_reason` 固定枚举（脚本与回放共用）：
+
+- `task_not_found`
+- `steps_not_found`
+- `missing_parsed_result_and_no_mappable_label`
+- `detail_missing_failure_hints`
+- `summary_message_not_classifiable`
+
+### 12) 单条治理样本回放（`--task-id`）
+
+脚本：`script/p53_woo_write_governance_summary.py`
+
+运行：
+
+```bash
+source venv/bin/activate
+python script/p53_woo_write_governance_summary.py \
+  --base-url "http://127.0.0.1:8000" \
+  --task-id "TASK-XXXX"
+```
+
+固定输出字段（最小审计集）：
+
+- `confirm_task_id`
+- `target_task_id`
+- `original_update_task_id`
+- `operation_result`
+- `verify_passed`
+- `verify_reason`
+- `failure_layer`
+- `governance_event_type`
+- `source_mode`
+- `unknown_reason`
+
+说明：`unknown_reason` 无原因时也输出空字符串，不允许缺字段。
+
+### 13) governance_event_type 与 failure_layer 的关系（固定）
+
+`governance_event_type` 固定枚举：
+
+- `confirm_succeeded`
+- `confirm_target_already_consumed`
+- `confirm_target_invalid`
+- `other_failed`
+- `unknown`
+
+关系说明：
+
+- `failure_layer` 是失败层级原始标签（更贴近执行侧）。
+- `governance_event_type` 是治理统计分桶（更贴近审计看板）。
+- 成功样本通常 `failure_layer=""`，但 `governance_event_type=confirm_succeeded`。
+- 失败样本优先使用 `failure_layer` 映射治理分桶；无可靠证据时归 `unknown`，避免误导审计。
+
+### 14) task_id 复盘顺序（P5.3 固化）
+
+基于单条 `confirm_task_id` 复盘时按以下顺序：
+
+1. **环境优先**：先看 readiness / 会话 /依赖连通，排除环境噪声。
+2. **治理其次**：看 `source_mode`、`governance_event_type`、`unknown_reason`。
+3. **写流最后**：只在治理放行后再看写后核验与页面执行细节。
+
+`unknown` 解读原则：
+
+- `unknown` 不是失败重分类，而是“证据不足，不做过度推断”的保守结论。
+- 若样本仅有自由文本且无可映射标签，必须保持 `unknown`，不为降低 unknown 比例而强行归类。
