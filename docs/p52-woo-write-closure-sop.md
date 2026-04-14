@@ -176,3 +176,62 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/<confirm_task_id>/steps"
 
 `unknown_exception` 仅作兜底，不作为常规回归目标。
 
+### 13) 失败样本落点统一（P5.2 第三轮）
+
+统一规则（强制）：
+
+1. `parsed_result.failure_layer` 是失败 taxonomy 的单一事实源
+2. `result_summary`、`error_message`、`/steps.action_executed.detail` 只能做映射展示
+3. 同一任务在不同观测面必须映射到同一个 `failure_layer`
+
+最小检查项：
+
+- `/api/v1/tasks/<confirm_task_id>` 里可读到 `parsed_result.failure_layer`
+- `result_summary` 与 `error_message` 的标签与 `parsed_result.failure_layer` 一致
+- `/api/v1/tasks/<confirm_task_id>/steps` 的 `action_executed.detail` 里 `failure_layer=` 与上面一致
+
+### 14) 失败聚合脚本（P5.2 第三轮）
+
+脚本：`scripts/p52_woo_write_failure_summary.py`
+
+默认只读 API（不默认回退 sqlite）：
+
+- `/api/v1/tasks`
+- `/api/v1/tasks/{task_id}`
+- `/api/v1/tasks/{task_id}/steps`
+
+运行方式：
+
+```bash
+source venv/bin/activate
+python scripts/p52_woo_write_failure_summary.py \
+  --base-url "http://127.0.0.1:8000" \
+  --limit 50 \
+  --task-prefix "TASK-P52"
+```
+
+固定输出字段（验收必须包含）：
+
+- `total_tasks`
+- `succeeded_tasks`
+- `failed_tasks`
+- `failure_distribution`
+- `recent_failed_tasks`
+
+其中 `recent_failed_tasks` 至少包含：
+
+- `task_id`
+- `failure_layer`
+
+### 15) 第三轮准生产验收判定（固定）
+
+本轮通过必须同时满足：
+
+1. **成功样本路径不回归**：至少 1 轮真实成功闭环可复验（`awaiting_confirmation -> confirm -> succeeded`）
+2. **失败样本可沉淀可统计**：聚合脚本可读出现有失败样本，并输出固定字段
+3. **失败分类可判读**：
+   - 环境类优先：`rpa_target_readiness_failed` 等
+   - 页面写流类：`edit_mode_not_entered`、`new_price_fill_failed`、`save_button_unavailable`、`save_feedback_failed`
+   - 核验不一致类：`post_write_verify_mismatch`
+
+不允许为了造失败而主动做危险写操作；优先复用历史安全失败样本（如 `confirm_target_invalid`）。

@@ -223,6 +223,31 @@ def test_execute_action_confirm_failure_merges_rpa_meta(monkeypatch):
     assert out["final_backend"] == "rpa_local_fake"
 
 
+def test_execute_action_confirm_failure_result_summary_uses_failure_layer(monkeypatch):
+    def fake_confirm_fail(_executor, state, slots):
+        return {
+            "error": "[old_label] 原始错误文案",
+            "error_code": "confirm_target_invalid",
+            "parsed_result": {"failure_layer": "confirm_target_invalid"},
+        }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action.execute_task_confirmation",
+        fake_confirm_fail,
+    )
+    state = {
+        "intent_code": "system.confirm_task",
+        "slots": {"task_id": "TASK-ORIG"},
+        "task_id": "TASK-CONFIRM",
+        "status": "processing",
+    }
+    out = execute_action.execute_action(state)
+    assert out["status"] == "failed"
+    assert out["failure_layer"] == "confirm_target_invalid"
+    assert out["error_message"] == "[confirm_target_invalid] 原始错误文案"
+    assert out["result_summary"] == "确认失败：[confirm_target_invalid] 原始错误文案"
+
+
 def test_run_confirm_update_price_rpa_failure_includes_meta(monkeypatch, tmp_path):
     monkeypatch.setattr("app.rpa.confirm_update_price.log_step", lambda *a, **k: None)
     monkeypatch.setattr(settings, "RPA_RUNNER_TYPE", "local_fake")

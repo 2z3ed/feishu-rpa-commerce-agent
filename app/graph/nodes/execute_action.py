@@ -21,6 +21,21 @@ from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.utils.task_logger import log_step
 
 
+def _extract_confirm_failure_layer(result: dict) -> str:
+    pr = result.get("parsed_result")
+    if isinstance(pr, dict):
+        layer = str(pr.get("failure_layer") or "").strip()
+        if layer:
+            return layer
+    code = str(result.get("error_code") or "").strip()
+    return code or "unknown_exception"
+
+
+def _strip_error_prefix(raw: str) -> str:
+    text = (raw or "").strip()
+    return re.sub(r"^\[[^\]]+\]\s*", "", text).strip()
+
+
 def execute_action(state: dict) -> dict:
     """
     Execute action based on intent.
@@ -271,10 +286,13 @@ def execute_action(state: dict) -> dict:
                 prf = result.get("parsed_result")
                 if isinstance(prf, dict):
                     state["parsed_result"] = prf
-                err_msg = result.get("error", "确认失败")
-                state["error_message"] = err_msg
+                err_msg = str(result.get("error") or "确认失败")
+                failure_layer = _extract_confirm_failure_layer(result)
+                state["failure_layer"] = failure_layer
+                display_err = _strip_error_prefix(err_msg)
+                state["error_message"] = f"[{failure_layer}] {display_err}" if display_err else f"[{failure_layer}]"
                 state["status"] = "failed"
-                state["result_summary"] = f"确认失败：{err_msg}"
+                state["result_summary"] = f"确认失败：{state['error_message']}"
                 if rpa_meta_fail:
                     state["execution_mode"] = rpa_meta_fail.get("execution_mode", "rpa")
                     state["execution_backend"] = rpa_meta_fail.get("execution_backend", "rpa_local_fake")
