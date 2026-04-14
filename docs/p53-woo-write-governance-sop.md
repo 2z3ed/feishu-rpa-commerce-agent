@@ -337,3 +337,59 @@ python script/p54_woo_write_gate_check.py \
 - `invalid_target_confirms_present`：
   - `recommended_action=allow`
   - 回放确认属于预期噪音后可放行
+
+### 21) P5.4 第三轮：门禁结果留痕结构（固定）
+
+门禁脚本单次运行结果必须稳定包含（同一对象、同一口径）：
+
+- `gate_run_at`
+- `gate_status`
+- `blocking_failures`
+- `warnings`
+- `review_hints`
+- `checked_tests`
+- `checked_scripts`
+- `sample_task_ids`
+
+说明：
+
+- `gate_status` 与 `status` 使用同一事实值，不允许出现双口径分叉。
+- `stdout` 输出与 `--output-json` 落盘结构必须完全一致。
+- 不额外再造第二份“类似结果对象”。
+
+### 22) 人工复核记录模板（可复制即用，固定结构）
+
+复核模板固定字段（全部必须存在）：
+
+- `gate_run_at`
+- `gate_status`
+- `rule_name`
+- `severity`
+- `recommended_action`
+- `recommended_entry`
+- `reviewed_task_ids`
+- `replay_result_summary`
+- `final_decision`
+- `reviewer`
+- `note`
+
+要求：
+
+- 无值时使用空字符串 `""` 或空数组 `[]`，不允许缺字段。
+- 仅提供模板与预填值，不做交互式填写、不做审批流、不做自动写回。
+
+### 23) 门禁结果与复核记录最小关联键（固定）
+
+固定最小关联键（仅这三项）：
+
+- `gate_run_at`
+- `rule_name`
+- `reviewed_task_ids`
+
+用途：
+
+- `gate_run_at`：定位到哪次门禁运行；
+- `rule_name`：定位到命中的哪条规则；
+- `reviewed_task_ids`：定位复核过哪些样本。
+
+通过这三个键即可把“门禁结果”与“复核记录”稳定对齐，避免依赖人工记忆。

@@ -5,6 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 
 UNKNOWN_RATIO_BLOCK_THRESHOLD = 0.2
@@ -193,6 +194,43 @@ def _build_review_hints(*, summary: dict, blocking_failures: list[str], warnings
     return hints
 
 
+def _build_review_record_templates(*, gate_run_at: str, gate_status: str, review_hints: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for hint in review_hints:
+        out.append(
+            {
+                "gate_run_at": gate_run_at,
+                "gate_status": gate_status,
+                "rule_name": str(hint.get("rule_name") or ""),
+                "severity": str(hint.get("severity") or ""),
+                "recommended_action": str(hint.get("recommended_action") or ""),
+                "recommended_entry": str(hint.get("recommended_entry") or ""),
+                "reviewed_task_ids": list(hint.get("recommended_task_ids") or []),
+                "replay_result_summary": "",
+                "final_decision": "",
+                "reviewer": "",
+                "note": "",
+            }
+        )
+    if out:
+        return out
+    return [
+        {
+            "gate_run_at": gate_run_at,
+            "gate_status": gate_status,
+            "rule_name": "",
+            "severity": "",
+            "recommended_action": "",
+            "recommended_entry": "",
+            "reviewed_task_ids": [],
+            "replay_result_summary": "",
+            "final_decision": "",
+            "reviewer": "",
+            "note": "",
+        }
+    ]
+
+
 def run_gate_check(
     *,
     base_url: str,
@@ -263,23 +301,51 @@ def run_gate_check(
     if replay_outputs:
         checks["replay_output"] = replay_outputs
 
-    status = "pass"
+    gate_status = "pass"
     if blocking_failures:
-        status = "fail"
+        gate_status = "fail"
     elif warnings:
-        status = "pass_with_warnings"
+        gate_status = "pass_with_warnings"
 
     review_hints = _build_review_hints(
         summary=summary_output,
         blocking_failures=blocking_failures,
         warnings=warnings,
     )
+    gate_run_at = datetime.now(timezone.utc).astimezone().isoformat()
+
+    checked_tests: list[str] = []
+    if run_tests:
+        checked_tests.append("tests/test_p53_woo_write_governance_summary.py")
+    checked_scripts: list[str] = ["script/p53_woo_write_governance_summary.py"]
+    sample_task_ids: list[str] = []
+    for tid in replay_task_ids:
+        if tid and tid not in sample_task_ids:
+            sample_task_ids.append(tid)
+    for event in (summary_output.get("recent_governance_events") if isinstance(summary_output, dict) else []) or []:
+        if not isinstance(event, dict):
+            continue
+        tid = str(event.get("confirm_task_id") or event.get("task_id") or "")
+        if tid and tid not in sample_task_ids:
+            sample_task_ids.append(tid)
+        if len(sample_task_ids) >= 10:
+            break
 
     return {
-        "status": status,
+        "status": gate_status,
+        "gate_run_at": gate_run_at,
+        "gate_status": gate_status,
         "blocking_failures": blocking_failures,
         "warnings": warnings,
         "review_hints": review_hints,
+        "checked_tests": checked_tests,
+        "checked_scripts": checked_scripts,
+        "sample_task_ids": sample_task_ids,
+        "review_record_templates": _build_review_record_templates(
+            gate_run_at=gate_run_at,
+            gate_status=gate_status,
+            review_hints=review_hints,
+        ),
         "thresholds": {
             "unknown_ratio_block_threshold": UNKNOWN_RATIO_BLOCK_THRESHOLD,
             "other_failed_confirms_block_if_gt": 0,
@@ -298,6 +364,7 @@ def main() -> int:
     parser.add_argument("--recent-limit", type=int, default=20)
     parser.add_argument("--replay-task-id", action="append", default=[])
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--output-json", default="")
     args = parser.parse_args()
 
     out = run_gate_check(
@@ -308,6 +375,11 @@ def main() -> int:
         replay_task_ids=[str(x) for x in (args.replay_task_id or [])],
         run_tests=not bool(args.skip_tests),
     )
+    if str(args.output_json or "").strip():
+        out_path = str(args.output_json).strip()
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(out, ensure_ascii=False, indent=2))
+            f.write("\n")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 1 if out["status"] == "fail" else 0
 
