@@ -393,3 +393,8 @@ python script/p54_woo_write_gate_check.py \
 - `reviewed_task_ids`：定位复核过哪些样本。
 
 通过这三个键即可把“门禁结果”与“复核记录”稳定对齐，避免依赖人工记忆。
+
+### 24) P5.5 全链路演练入口
+
+阶段总演练与总收口文档见：`docs/p55-woo-release-rehearsal.md`。  
+发布前可直接执行 `script/p55_woo_release_rehearsal.py` 进行一键编排演练与留档。
