@@ -286,3 +286,54 @@ python script/p54_woo_write_gate_check.py \
    - 按 warning 里的 `task_id` 调 `p53 --task-id` 回放
    - 判断是否是预期样本（如 invalid target 测试噪音）
    - 记录复核结论后再决定放行
+
+### 18) P5.4 第二轮：门禁命中后的复核提示输出（固定）
+
+`p54` 门禁输出新增 `review_hints`，用于把“命中规则”直接连接到“下一步复核动作”。
+
+`review_hints` 固定字段：
+
+- `rule_name`
+- `recommended_action`
+- `recommended_entry`
+- `recommended_task_ids`
+- `next_step`
+
+固定枚举：
+
+- `recommended_entry` 只能是：
+  - `p53_replay_task_id`
+  - `tasks_detail`
+  - `steps_action_executed`
+- `recommended_action` 只能是：
+  - `block`
+  - `review`
+  - `allow`
+
+说明：`p54` 只编排复核提示，不复写 `p53` 的治理解析逻辑；`governance_event_type/source_mode/unknown_reason/confirm-only` 口径全部复用 `p53` 输出。
+
+### 19) recommended_task_ids 选择规则（固定）
+
+- 来源统一：`p53` 聚合输出的 `recent_governance_events`。
+- 选择优先级：优先选“最近命中的相关样本”（按 `recent_governance_events` 顺序取）。
+- warning 与 blocking 使用同一选择规则，不分叉。
+- 返回上限：最多少量样本（当前门禁固定最多 3 条）。
+- 没有可推荐样本时：返回空数组 `[]`，不允许缺字段。
+
+### 20) warning/fail 复核与放行最小规则（P5.4 第二轮）
+
+- `other_failed_confirms_gt_0`：
+  - `recommended_action=block`
+  - 必须先回放对应 `task_id`，未定责前不得放行
+- `unknown_ratio_gt_threshold`：
+  - `recommended_action=block`
+  - 必须先回放 unknown 样本并确认原因，再决定是否恢复放行
+- `unknown_confirms_present`（低比例）：
+  - `recommended_action=review`
+  - 抽样回放后可人工复核放行
+- `blocked_repeat_confirms_eq_0`：
+  - `recommended_action=review`
+  - 需补充重复 confirm 覆盖样本后再放行
+- `invalid_target_confirms_present`：
+  - `recommended_action=allow`
+  - 回放确认属于预期噪音后可放行

@@ -38,7 +38,11 @@ def test_gate_pass_with_warnings(monkeypatch):
                 '"governance_distribution":{"confirm_succeeded":7,"confirm_target_invalid":1,"unknown":1},'
                 '"source_mode_distribution":{"new_schema":7,"legacy_compatible":2,"unknown":1},'
                 '"unknown_reason_distribution":{"summary_message_not_classifiable":1},'
-                '"recent_governance_events":[]}'
+                '"recent_governance_events":['
+                '{"task_id":"TASK-C9","confirm_task_id":"TASK-C9","governance_event_type":"unknown"},'
+                '{"task_id":"TASK-C8","confirm_task_id":"TASK-C8","governance_event_type":"confirm_target_invalid"},'
+                '{"task_id":"TASK-C7","confirm_task_id":"TASK-C7","governance_event_type":"confirm_succeeded"}'
+                ']}'
             ),
             "",
         )
@@ -57,6 +61,15 @@ def test_gate_pass_with_warnings(monkeypatch):
     assert any("blocked_repeat_confirms_eq_0" in w for w in out["warnings"])
     assert any("invalid_target_confirms_present" in w for w in out["warnings"])
     assert any("unknown_confirms_present" in w for w in out["warnings"])
+    assert isinstance(out.get("review_hints"), list)
+    hint_rules = {h["rule_name"] for h in out["review_hints"]}
+    assert "unknown_confirms_present" in hint_rules
+    assert "blocked_repeat_confirms_eq_0" in hint_rules
+    assert "invalid_target_confirms_present" in hint_rules
+    for h in out["review_hints"]:
+        assert h["recommended_entry"] in {"p53_replay_task_id", "tasks_detail", "steps_action_executed"}
+        assert h["recommended_action"] in {"block", "review", "allow"}
+        assert "recommended_task_ids" in h
 
 
 def test_gate_blocking_failure_when_other_failed(monkeypatch):
@@ -87,7 +100,9 @@ def test_gate_blocking_failure_when_other_failed(monkeypatch):
                 '"governance_distribution":{"other_failed":1},'
                 '"source_mode_distribution":{"new_schema":2},'
                 '"unknown_reason_distribution":{},'
-                '"recent_governance_events":[]}'
+                '"recent_governance_events":['
+                '{"task_id":"TASK-C2","confirm_task_id":"TASK-C2","governance_event_type":"other_failed"}'
+                ']}'
             ),
             "",
         )
@@ -103,6 +118,10 @@ def test_gate_blocking_failure_when_other_failed(monkeypatch):
     )
     assert out["status"] == "fail"
     assert any("other_failed_confirms_gt_0" in x for x in out["blocking_failures"])
+    hint = next(h for h in out["review_hints"] if h["rule_name"] == "other_failed_confirms_gt_0")
+    assert hint["recommended_action"] == "block"
+    assert hint["recommended_entry"] == "p53_replay_task_id"
+    assert hint["recommended_task_ids"] == ["TASK-C2"]
 
 
 def test_gate_blocking_failure_when_unknown_ratio_high(monkeypatch):
@@ -133,7 +152,10 @@ def test_gate_blocking_failure_when_unknown_ratio_high(monkeypatch):
                 '"governance_distribution":{"unknown":3},'
                 '"source_mode_distribution":{"unknown":3},'
                 '"unknown_reason_distribution":{"summary_message_not_classifiable":3},'
-                '"recent_governance_events":[]}'
+                '"recent_governance_events":['
+                '{"task_id":"TASK-C3","confirm_task_id":"TASK-C3","governance_event_type":"unknown"},'
+                '{"task_id":"TASK-C4","confirm_task_id":"TASK-C4","governance_event_type":"unknown"}'
+                ']}'
             ),
             "",
         )
@@ -149,3 +171,7 @@ def test_gate_blocking_failure_when_unknown_ratio_high(monkeypatch):
     )
     assert out["status"] == "fail"
     assert any("unknown_ratio_gt_threshold" in x for x in out["blocking_failures"])
+    hint = next(h for h in out["review_hints"] if h["rule_name"] == "unknown_ratio_gt_threshold")
+    assert hint["recommended_action"] == "block"
+    assert hint["recommended_entry"] == "p53_replay_task_id"
+    assert hint["recommended_task_ids"] == ["TASK-C3", "TASK-C4"]

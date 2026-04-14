@@ -5,10 +5,16 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 
 UNKNOWN_RATIO_BLOCK_THRESHOLD = 0.2
+MAX_RECOMMENDED_TASK_IDS = 3
+ENTRY_P53_REPLAY_TASK_ID = "p53_replay_task_id"
+ENTRY_TASKS_DETAIL = "tasks_detail"
+ENTRY_STEPS_ACTION_EXECUTED = "steps_action_executed"
+ACTION_BLOCK = "block"
+ACTION_REVIEW = "review"
+ACTION_ALLOW = "allow"
 
 
 def _run_command(cmd: list[str]) -> tuple[int, str, str]:
@@ -92,6 +98,101 @@ def _build_gate_decision(summary: dict) -> tuple[list[str], list[str]]:
     return blocking_failures, warnings
 
 
+def _pick_recent_task_ids(summary: dict, *, event_type: str, max_items: int = MAX_RECOMMENDED_TASK_IDS) -> list[str]:
+    events = summary.get("recent_governance_events")
+    if not isinstance(events, list):
+        return []
+    out: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("governance_event_type") or "") != event_type:
+            continue
+        task_id = str(event.get("confirm_task_id") or event.get("task_id") or "")
+        if not task_id or task_id in out:
+            continue
+        out.append(task_id)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _build_review_hints(*, summary: dict, blocking_failures: list[str], warnings: list[str]) -> list[dict]:
+    hints: list[dict] = []
+    # Blocking rules
+    for failure in blocking_failures:
+        if failure.startswith("other_failed_confirms_gt_0"):
+            hints.append(
+                {
+                    "severity": "blocking",
+                    "rule_name": "other_failed_confirms_gt_0",
+                    "recommended_action": ACTION_BLOCK,
+                    "recommended_entry": ENTRY_P53_REPLAY_TASK_ID,
+                    "recommended_task_ids": _pick_recent_task_ids(summary, event_type="other_failed"),
+                    "next_step": "按 task_id 执行 p53 回放，再对照 tasks_detail 与 steps_action_executed 定位失败层级。",
+                }
+            )
+        elif failure.startswith("unknown_ratio_gt_threshold"):
+            hints.append(
+                {
+                    "severity": "blocking",
+                    "rule_name": "unknown_ratio_gt_threshold",
+                    "recommended_action": ACTION_BLOCK,
+                    "recommended_entry": ENTRY_P53_REPLAY_TASK_ID,
+                    "recommended_task_ids": _pick_recent_task_ids(summary, event_type="unknown"),
+                    "next_step": "优先回放 unknown 样本，确认是否是历史证据不足或字段口径退化，再决定是否放行。",
+                }
+            )
+        elif failure.startswith("summary_") or failure.startswith("replay_") or failure.startswith("pytest_"):
+            hints.append(
+                {
+                    "severity": "blocking",
+                    "rule_name": "gate_infra_or_shape_failure",
+                    "recommended_action": ACTION_BLOCK,
+                    "recommended_entry": ENTRY_TASKS_DETAIL,
+                    "recommended_task_ids": [],
+                    "next_step": "先修复脚本执行/输出结构问题，再重新运行门禁。",
+                }
+            )
+
+    # Warning rules
+    for warning in warnings:
+        if warning.startswith("unknown_confirms_present"):
+            hints.append(
+                {
+                    "severity": "warning",
+                    "rule_name": "unknown_confirms_present",
+                    "recommended_action": ACTION_REVIEW,
+                    "recommended_entry": ENTRY_P53_REPLAY_TASK_ID,
+                    "recommended_task_ids": _pick_recent_task_ids(summary, event_type="unknown"),
+                    "next_step": "抽样回放 unknown 样本，确认为历史证据不足后可人工复核放行。",
+                }
+            )
+        elif warning.startswith("blocked_repeat_confirms_eq_0"):
+            hints.append(
+                {
+                    "severity": "warning",
+                    "rule_name": "blocked_repeat_confirms_eq_0",
+                    "recommended_action": ACTION_REVIEW,
+                    "recommended_entry": ENTRY_STEPS_ACTION_EXECUTED,
+                    "recommended_task_ids": _pick_recent_task_ids(summary, event_type="confirm_succeeded"),
+                    "next_step": "补一组重复 confirm 样本回归，确认幂等拦截覆盖后再放行。",
+                }
+            )
+        elif warning.startswith("invalid_target_confirms_present"):
+            hints.append(
+                {
+                    "severity": "warning",
+                    "rule_name": "invalid_target_confirms_present",
+                    "recommended_action": ACTION_ALLOW,
+                    "recommended_entry": ENTRY_P53_REPLAY_TASK_ID,
+                    "recommended_task_ids": _pick_recent_task_ids(summary, event_type="confirm_target_invalid"),
+                    "next_step": "回放确认属于预期无效 target 测试噪音后可放行。",
+                }
+            )
+    return hints
+
+
 def run_gate_check(
     *,
     base_url: str,
@@ -129,9 +230,11 @@ def run_gate_check(
     ]
     summary, summary_err = _run_json_command(summary_cmd, label="summary")
     checks["summary"] = {"command": summary_cmd, "ok": summary_err is None}
+    summary_output: dict = {}
     if summary_err:
         blocking_failures.append(summary_err)
     else:
+        summary_output = summary
         shape_errs = _validate_summary_shape(summary)
         blocking_failures.extend(shape_errs)
         b, w = _build_gate_decision(summary)
@@ -166,10 +269,17 @@ def run_gate_check(
     elif warnings:
         status = "pass_with_warnings"
 
+    review_hints = _build_review_hints(
+        summary=summary_output,
+        blocking_failures=blocking_failures,
+        warnings=warnings,
+    )
+
     return {
         "status": status,
         "blocking_failures": blocking_failures,
         "warnings": warnings,
+        "review_hints": review_hints,
         "thresholds": {
             "unknown_ratio_block_threshold": UNKNOWN_RATIO_BLOCK_THRESHOLD,
             "other_failed_confirms_block_if_gt": 0,
