@@ -219,7 +219,7 @@ def run_real_admin_readonly_flow(
             parsed_result=pr,
             evidence_paths=evidence_paths,
             error_code=code,
-            error_message=message,
+            error_message=f"[{failure_layer}] {message}",
         )
 
     page.goto("about:blank", wait_until="domcontentloaded")

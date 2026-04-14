@@ -113,6 +113,15 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/<task_id>/steps"
 
 排查顺序固定为：**环境 -> 页面加载 -> 会话/readiness -> SKU 命中 -> 详情加载与读回**。
 
+### 失败层级单一事实源（第三轮固化）
+
+- 单一事实源：`parsed_result.failure_layer`
+- 映射展示面（必须与单一事实源一致）：
+  - `result_summary` 前缀：`[failure_layer] ...`
+  - `error_message` 前缀：`[failure_layer] ...`
+  - `steps.detail`：包含 `failure_layer=<value>`
+- 若三处标签不一致，视为失败样本沉淀不合格，需先修口径再继续回归。
+
 ## 4) 重复回归时重点看哪些字段
 
 每次回归都要记录：
@@ -140,7 +149,31 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/<task_id>/steps"
   - 失败 Y 次
   - 失败 taxonomy 分布（按 `failure_layer` 聚合）
 
-## 6) 环境问题 vs 业务逻辑问题（快速判别）
+## 6) 失败聚合脚本（API 只读）
+
+脚本：`scripts/p51_woo_readonly_failure_summary.py`
+
+示例命令：
+
+```bash
+source venv/bin/activate
+python3 scripts/p51_woo_readonly_failure_summary.py --base-url http://127.0.0.1:8000 --limit 50 --task-prefix TASK-P50-R3-MANUAL-WOO-SAMPLE
+```
+
+固定输出字段：
+- `total_tasks`
+- `succeeded_tasks`
+- `failed_tasks`
+- `failure_distribution`（taxonomy -> count）
+- `recent_failed_tasks`（至少 `task_id` + `failure_layer`）
+
+该脚本只读访问：
+- `GET /api/v1/tasks`
+- `GET /api/v1/tasks/{task_id}`
+- `GET /api/v1/tasks/{task_id}/steps`
+
+不写任务、不改状态、不落盘任务系统。
+## 7) 环境问题 vs 业务逻辑问题（快速判别）
 
 可优先判定为环境问题：
 - `browser_start_failed`

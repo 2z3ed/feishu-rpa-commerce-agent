@@ -75,7 +75,12 @@ def run_query_sku_status_real_admin_readonly(*, task_id: str, trace_id: str, sku
         "platform": "woo",
     }
     if not out.success:
-        _log("readonly_read_failed", "failed", f"error_code={out.error_code} msg={(out.error_message or '')[:400]}")
+        failure_layer = str((out.parsed_result or {}).get("failure_layer") or "unknown_exception")
+        _log(
+            "readonly_read_failed",
+            "failed",
+            f"failure_layer={failure_layer} error_code={out.error_code} msg={(out.error_message or '')[:400]}",
+        )
         return None, {
             "error": out.error_message or "readonly query failed",
             "error_code": out.error_code or "rpa_query_read_failed",

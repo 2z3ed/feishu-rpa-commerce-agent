@@ -43,6 +43,7 @@ def test_p51_readonly_readiness_failure_layer(tmp_path):
     assert out.error_code == ERROR_READINESS_NOT_READY
     assert out.parsed_result["failure_layer"] == "session_unavailable"
     assert out.result_summary.startswith("[session_unavailable]")
+    assert out.error_message.startswith("[session_unavailable]")
 
 
 def test_p51_readonly_selector_failure_marks_detail_not_loaded(monkeypatch, tmp_path):
@@ -99,6 +100,7 @@ def test_p51_readonly_selector_failure_marks_detail_not_loaded(monkeypatch, tmp_
     assert out.error_code == ERROR_DETAIL_SELECTOR_MISSING
     assert out.parsed_result["detail_loaded"] is False
     assert out.parsed_result["failure_layer"] == "detail_not_loaded"
+    assert out.error_message.startswith("[detail_not_loaded]")
 
 
 def test_p51_readonly_readback_inconsistent(monkeypatch, tmp_path):
@@ -164,6 +166,7 @@ def test_p51_readonly_readback_inconsistent(monkeypatch, tmp_path):
     assert out.success is False
     assert out.error_code == ERROR_READBACK_UNSTABLE
     assert out.parsed_result["failure_layer"] == "readback_unstable"
+    assert out.error_message.startswith("[readback_unstable]")
 
 
 def test_p51_readonly_success_fields_stable(monkeypatch, tmp_path):
