@@ -86,6 +86,16 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         evidence_count = result.get("evidence_count", 0)
         rpa_runner = result.get("rpa_runner", "none")
         verify_mode = result.get("verify_mode", "none")
+        pr = result.get("parsed_result") or {}
+        if not isinstance(pr, dict):
+            pr = {}
+        verify_passed = result.get("verify_passed", pr.get("verify_passed", None))
+        verify_reason = result.get("verify_reason", pr.get("verify_reason", ""))
+        operation_result = result.get("operation_result", pr.get("operation_result", ""))
+        failure_layer = pr.get("failure_layer", "")
+        old_price = pr.get("old_price", None)
+        new_price = pr.get("new_price", None)
+        post_save_price = pr.get("post_save_price", None)
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         log_step(
             task_id,
@@ -104,7 +114,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 f"environment_ready={environment_ready}, live_probe_enabled={live_probe_enabled}, "
                 f"provider_id={provider_id}, capability={capability}, readiness_status={readiness_status}, "
                 f"endpoint_profile={endpoint_profile}, session_injection_mode={session_injection_mode}, "
-                f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}"
+                f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}, "
+                f"verify_passed={verify_passed}, verify_reason={verify_reason}, operation_result={operation_result}, "
+                f"failure_layer={failure_layer}, old_price={old_price}, new_price={new_price}, post_save_price={post_save_price}"
             ),
         )
         

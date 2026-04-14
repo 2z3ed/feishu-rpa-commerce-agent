@@ -282,6 +282,9 @@ def run_confirm_update_price_rpa(
             "failed",
             f"error_code={out.error_code} msg={(out.error_message or '')[:400]}",
         )
+        parsed_fail = out.parsed_result if isinstance(out.parsed_result, dict) else {}
+        if "failure_layer" not in parsed_fail:
+            parsed_fail["failure_layer"] = "unknown_exception"
         fail_meta = _rpa_observability_meta(
             runner=runner,
             evidence_dir=evidence_dir,
@@ -294,6 +297,7 @@ def run_confirm_update_price_rpa(
             "error": out.error_message or "RPA 执行失败",
             "error_code": out.error_code,
             "evidence_paths": out.evidence_paths,
+            "parsed_result": parsed_fail,
             "_rpa_meta": fail_meta,
         }
 
@@ -319,13 +323,14 @@ def run_confirm_update_price_rpa(
             except (TypeError, ValueError):
                 old_p = 0.0
             try:
-                new_p = float(pr.get("page_current_price_after_save", pr.get("target_price", target_price)))
+                new_p = float(pr.get("post_save_price", pr.get("page_current_price_after_save", pr.get("target_price", target_price))))
             except (TypeError, ValueError):
                 new_p = float(target_price)
             legacy = {
                 "sku": sku_u,
                 "old_price": old_p,
                 "new_price": new_p,
+                "post_save_price": new_p,
                 "status": "success" if verify_passed else "failed",
                 "platform": pr.get("platform", platform),
                 "product_name": pr.get("product_name"),
@@ -348,6 +353,7 @@ def run_confirm_update_price_rpa(
                 "expected_target_price": float(target_price),
                 "compared_price": pr.get("page_current_price_after_save"),
                 "api_price_after_update": None,
+                "parsed_result": pr,
             }
         else:
             verify_passed = bool(pr.get("target_sku_hit", False) and pr.get("detail_loaded", False))
@@ -435,6 +441,7 @@ def run_confirm_update_price_rpa(
                 "_rpa_meta": sku_meta,
             }
 
+    legacy["parsed_result"] = pr
     meta = _rpa_observability_meta(
         runner=runner,
         evidence_dir=evidence_dir,

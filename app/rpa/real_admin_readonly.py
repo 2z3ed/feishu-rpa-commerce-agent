@@ -436,6 +436,7 @@ def run_real_admin_update_price_flow(
             "target_price": requested_target_price,
             "page_current_price": requested_current_price,
             "page_current_price_after_save": None,
+            "post_save_price": None,
             "page_new_price_field": requested_target_price,
             "page_status": "unknown",
             "page_message": "",
@@ -451,6 +452,7 @@ def run_real_admin_update_price_flow(
             "operation_result": operation_result,
             "session_readback_ok": bool(success),
             "evidence_count": len(evidence_paths),
+            "failure_layer": "",
             # --- write contract ---
             "input_price": None,
             "submit_attempted": False,
@@ -462,21 +464,29 @@ def run_real_admin_update_price_flow(
             "compare_tolerance": tol,
         }
 
-    def fail(*, summary: str, code: str, message: str, extra: dict | None = None) -> RpaExecutionOutput:
+    def fail(
+        *,
+        summary: str,
+        code: str,
+        message: str,
+        failure_layer: str = "unknown_exception",
+        extra: dict | None = None,
+    ) -> RpaExecutionOutput:
         p99 = _screenshot(page, evidence_dir / "99_failure.png")
         if p99:
             evidence_paths.append(p99)
         pr = _base_parsed(False)
+        pr["failure_layer"] = failure_layer
         if extra:
             pr.update(extra)
         pr["evidence_count"] = len(evidence_paths)
         return RpaExecutionOutput(
             success=False,
-            result_summary=summary,
+            result_summary=f"[{failure_layer}] {summary}",
             parsed_result=pr,
             evidence_paths=evidence_paths,
             error_code=code,
-            error_message=message,
+            error_message=f"[{failure_layer}] {message}",
         )
 
     page.goto("about:blank", wait_until="domcontentloaded")
@@ -488,12 +498,18 @@ def run_real_admin_update_price_flow(
     try:
         resp = page.goto(home_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"home navigation failed: {exc}", code=ERROR_HOME_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"home navigation failed: {exc}",
+            code=ERROR_HOME_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="unknown_exception",
+        )
     if resp is not None and resp.status >= 400:
         return fail(
             summary=f"home HTTP {resp.status}",
             code=ERROR_HOME_LOAD_FAILED,
             message=f"home 页面打不开：HTTP {resp.status}",
+            failure_layer="unknown_exception",
         )
     p1 = _screenshot(page, evidence_dir / "01_home_loaded.png")
     if p1:
@@ -502,12 +518,18 @@ def run_real_admin_update_price_flow(
     try:
         cresp = page.goto(catalog_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"catalog navigation failed: {exc}", code=ERROR_CATALOG_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"catalog navigation failed: {exc}",
+            code=ERROR_CATALOG_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="unknown_exception",
+        )
     if cresp is not None and cresp.status >= 400:
         return fail(
             summary=f"catalog HTTP {cresp.status}",
             code=ERROR_CATALOG_LOAD_FAILED,
             message=f"catalog 页面打不开：HTTP {cresp.status}",
+            failure_layer="unknown_exception",
         )
     try:
         page.wait_for_timeout(400)
@@ -516,6 +538,7 @@ def run_real_admin_update_price_flow(
                 summary="catalog SKU search empty",
                 code=ERROR_CATALOG_SKU_NOT_FOUND,
                 message="SKU 搜索无结果（目录空态选择器可见）",
+                failure_layer="sku_not_hit",
                 extra={"page_message": "catalog_sku_not_found"},
             )
     except Exception as exc:
@@ -523,6 +546,7 @@ def run_real_admin_update_price_flow(
             summary=f"catalog empty-state check failed: {exc}",
             code=ERROR_CATALOG_LOAD_FAILED,
             message=str(exc),
+            failure_layer="unknown_exception",
         )
     p2 = _screenshot(page, evidence_dir / "02_catalog_loaded.png")
     if p2:
@@ -531,12 +555,18 @@ def run_real_admin_update_price_flow(
     try:
         dresp = page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"detail navigation failed: {exc}", code=ERROR_DETAIL_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"detail navigation failed: {exc}",
+            code=ERROR_DETAIL_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="unknown_exception",
+        )
     if dresp is not None and dresp.status >= 400:
         return fail(
             summary=f"detail HTTP {dresp.status}",
             code=ERROR_DETAIL_LOAD_FAILED,
             message=f"detail 页面打不开：HTTP {dresp.status}",
+            failure_layer="unknown_exception",
         )
     try:
         page.locator(price_sel).first.wait_for(state="visible", timeout=timeout_ms)
@@ -545,6 +575,7 @@ def run_real_admin_update_price_flow(
             summary=f"detail price selector missing: {price_sel!r}",
             code=ERROR_DETAIL_SELECTOR_MISSING,
             message=f"detail 关键选择器缺失或不可见：{price_sel!r} ({exc})",
+            failure_layer="current_price_read_failed",
             extra={"detail_loaded": True, "page_message": "detail_selector_missing"},
         )
 
@@ -558,6 +589,7 @@ def run_real_admin_update_price_flow(
             summary="detail SKU mismatch vs expected",
             code=ERROR_DETAIL_SKU_MISMATCH,
             message=f"页面未命中目标 SKU：期望 {sku_u}，页面/URL 未对齐",
+            failure_layer="sku_not_hit",
             extra={
                 "detail_loaded": True,
                 "page_sku": rb0["page_sku"],
@@ -574,6 +606,7 @@ def run_real_admin_update_price_flow(
             summary="new price selector not configured",
             code=ERROR_DETAIL_INPUT_NOT_FOUND,
             message="未配置新价格输入框选择器：RPA_REAL_ADMIN_DETAIL_NEW_PRICE_SELECTOR",
+            failure_layer="new_price_fill_failed",
             extra={"detail_loaded": True, "page_message": "new_price_selector_missing"},
         )
     try:
@@ -584,6 +617,7 @@ def run_real_admin_update_price_flow(
             summary=f"detail input not found: {new_price_sel!r}",
             code=ERROR_DETAIL_INPUT_NOT_FOUND,
             message=f"detail 新价格输入框缺失或不可见：{new_price_sel!r} ({exc})",
+            failure_layer="edit_mode_not_entered",
             extra={"detail_loaded": True, "page_message": "detail_input_missing"},
         )
 
@@ -596,6 +630,7 @@ def run_real_admin_update_price_flow(
             summary=f"fill target price failed: {exc}",
             code=ERROR_DETAIL_INPUT_NOT_FOUND,
             message=str(exc),
+            failure_layer="new_price_fill_failed",
             extra={"detail_loaded": True, "page_message": "detail_input_fill_failed"},
         )
     p4 = _screenshot(page, evidence_dir / "04_after_input.png")
@@ -609,6 +644,7 @@ def run_real_admin_update_price_flow(
             summary="save button selector not configured",
             code=ERROR_DETAIL_SAVE_BUTTON_NOT_FOUND,
             message="未配置保存按钮选择器：RPA_REAL_ADMIN_DETAIL_SAVE_BUTTON_SELECTOR",
+            failure_layer="save_button_unavailable",
             extra={"detail_loaded": True, "page_message": "save_button_selector_missing", "input_price": input_price},
         )
     try:
@@ -619,6 +655,7 @@ def run_real_admin_update_price_flow(
             summary=f"save button not found: {save_btn_sel!r}",
             code=ERROR_DETAIL_SAVE_BUTTON_NOT_FOUND,
             message=f"detail 保存按钮缺失或不可见：{save_btn_sel!r} ({exc})",
+            failure_layer="save_button_unavailable",
             extra={"detail_loaded": True, "page_message": "save_button_missing", "input_price": input_price},
         )
 
@@ -628,6 +665,7 @@ def run_real_admin_update_price_flow(
                 summary="save button disabled",
                 code=ERROR_DETAIL_SAVE_BUTTON_DISABLED,
                 message="detail 保存按钮不可用（disabled）",
+                failure_layer="save_button_unavailable",
                 extra={"detail_loaded": True, "page_message": "save_button_disabled", "input_price": input_price},
             )
     except Exception as exc:
@@ -635,6 +673,7 @@ def run_real_admin_update_price_flow(
             summary=f"save button state check failed: {exc}",
             code=ERROR_DETAIL_SAVE_BUTTON_DISABLED,
             message=str(exc),
+            failure_layer="save_button_unavailable",
             extra={"detail_loaded": True, "page_message": "save_button_state_unknown", "input_price": input_price},
         )
 
@@ -676,6 +715,7 @@ def run_real_admin_update_price_flow(
             summary=f"submit click failed: {exc}",
             code=ERROR_DETAIL_SUBMIT_FAILED,
             message=str(exc),
+            failure_layer="save_feedback_failed",
             extra={
                 "detail_loaded": True,
                 "page_message": "submit_click_failed",
@@ -696,6 +736,7 @@ def run_real_admin_update_price_flow(
             summary="save result selector not configured",
             code=ERROR_DETAIL_SAVE_RESULT_TIMEOUT,
             message="未配置保存结果选择器：RPA_REAL_ADMIN_DETAIL_SAVE_RESULT_SELECTOR",
+            failure_layer="save_feedback_failed",
             extra={
                 "detail_loaded": True,
                 "page_message": "save_result_selector_missing",
@@ -714,6 +755,7 @@ def run_real_admin_update_price_flow(
             summary=f"save result timeout: {exc}",
             code=ERROR_DETAIL_SAVE_RESULT_TIMEOUT,
             message=f"保存结果超时：{save_res_sel!r} ({exc})",
+            failure_layer="save_feedback_failed",
             extra={
                 "detail_loaded": True,
                 "page_message": "save_result_timeout",
@@ -748,6 +790,7 @@ def run_real_admin_update_price_flow(
             summary=f"save result reported error: {save_text[:200]}",
             code=ERROR_DETAIL_SAVE_RESULT_ERROR,
             message=save_text or "保存结果返回 error",
+            failure_layer="save_feedback_failed",
             extra={
                 "detail_loaded": True,
                 "page_message": "save_result_error",
@@ -765,6 +808,7 @@ def run_real_admin_update_price_flow(
             summary="submit completed but no success status",
             code=ERROR_DETAIL_SUBMIT_NO_EFFECT,
             message="点击保存后未获得可判定的成功状态（保存结果区无 success/ok）",
+            failure_layer="save_feedback_failed",
             extra={
                 "detail_loaded": True,
                 "page_message": "submit_no_effect",
@@ -790,6 +834,7 @@ def run_real_admin_update_price_flow(
             summary=f"post-save readback missing: {exc}",
             code=ERROR_DETAIL_POST_SAVE_READBACK_MISSING,
             message="保存后读回当前价失败（选择器缺失或不可读）",
+            failure_layer="post_write_verify_mismatch",
             extra={
                 "detail_loaded": True,
                 "page_message": "post_save_readback_missing",
@@ -808,6 +853,7 @@ def run_real_admin_update_price_flow(
             summary="post-save current price unparseable",
             code=ERROR_DETAIL_POST_SAVE_READBACK_MISSING,
             message=f"保存后当前价不可解析：{raw_after!r}",
+            failure_layer="post_write_verify_mismatch",
             extra={
                 "detail_loaded": True,
                 "page_message": "post_save_readback_unparseable",
@@ -863,12 +909,14 @@ def run_real_admin_update_price_flow(
             summary=f"post-save price mismatch expected={expected} got={after_price}",
             code=ERROR_DETAIL_POST_SAVE_PRICE_MISMATCH,
             message=f"保存后价格不一致：期望 {expected}，读回 {after_price}",
+            failure_layer="post_write_verify_mismatch",
             extra={
                 "detail_loaded": True,
                 "product_name": product_name,
                 "page_sku": page_disp,
                 "page_current_price": rb0.get("page_current_price"),
                 "page_current_price_after_save": after_price,
+                "post_save_price": after_price,
                 "page_status": page_status,
                 "page_message": page_message,
                 "target_sku_hit": True,
@@ -890,6 +938,7 @@ def run_real_admin_update_price_flow(
             "page_current_price": rb0.get("page_current_price"),
             "page_new_price_field": input_price,
             "page_current_price_after_save": after_price,
+            "post_save_price": after_price,
             "page_status": page_status,
             "page_message": page_message,
             "target_sku_hit": True,
