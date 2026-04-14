@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, unquote, urljoin
 
 from app.core.config import settings
 from app.rpa.schema import RpaExecutionOutput
@@ -13,6 +13,8 @@ ERROR_CATALOG_SKU_NOT_FOUND = "rpa_real_admin_catalog_sku_not_found"
 ERROR_DETAIL_LOAD_FAILED = "rpa_real_admin_detail_load_failed"
 ERROR_DETAIL_SELECTOR_MISSING = "rpa_real_admin_detail_selector_missing"
 ERROR_DETAIL_SKU_MISMATCH = "rpa_real_admin_detail_sku_mismatch"
+ERROR_READINESS_NOT_READY = "rpa_real_admin_readiness_not_ready"
+ERROR_READBACK_UNSTABLE = "rpa_real_admin_readback_unstable"
 
 # P4.5 write-flow failure taxonomy (real_admin_prepared only)
 ERROR_DETAIL_INPUT_NOT_FOUND = "rpa_real_admin_detail_input_not_found"
@@ -55,13 +57,14 @@ def parse_real_admin_readback(page, *, sku: str, requested_target_price: float) 
     name_sel = (settings.RPA_REAL_ADMIN_DETAIL_PRODUCT_NAME_SELECTOR or "").strip()
 
     raw_price = ""
-    try:
-        pl = page.locator(price_sel).first
-        raw_price = (pl.inner_text(timeout=3000) or "").strip()
-        if not raw_price:
-            raw_price = (pl.input_value(timeout=3000) or "").strip()
-    except Exception:
-        raw_price = ""
+    if price_sel:
+        try:
+            pl = page.locator(price_sel).first
+            raw_price = (pl.inner_text(timeout=3000) or "").strip()
+            if not raw_price:
+                raw_price = (pl.input_value(timeout=3000) or "").strip()
+        except Exception:
+            raw_price = ""
     page_cur = _parse_float_loose(raw_price)
     if page_cur is None:
         page_cur = float("nan")
@@ -81,8 +84,10 @@ def parse_real_admin_readback(page, *, sku: str, requested_target_price: float) 
         except Exception:
             product_name = None
 
-    url_u = (page.url or "").upper()
-    target_hit = page_disp == sku_u if page_disp else sku_u in url_u
+    page_disp_norm = _normalize_sku_token(page_disp)
+    sku_norm = _normalize_sku_token(sku_u)
+    url_u = unquote((page.url or "")).upper()
+    target_hit = page_disp_norm == sku_norm if page_disp_norm else sku_norm in _normalize_sku_token(url_u)
 
     page_status = "loaded"
     if status_sel:
@@ -172,19 +177,28 @@ def run_real_admin_readonly_flow(
             "operation_result": operation_result,
             "session_readback_ok": bool(success),
             "evidence_count": len(evidence_paths),
+            "failure_layer": "",
         }
 
-    def fail(*, summary: str, code: str, message: str, extra: dict | None = None) -> RpaExecutionOutput:
+    def fail(
+        *,
+        summary: str,
+        code: str,
+        message: str,
+        failure_layer: str = "unknown_exception",
+        extra: dict | None = None,
+    ) -> RpaExecutionOutput:
         p99 = _screenshot(page, evidence_dir / "99_failure.png")
         if p99:
             evidence_paths.append(p99)
         pr = _base_parsed(False)
+        pr["failure_layer"] = failure_layer
         if extra:
             pr.update(extra)
         pr["evidence_count"] = len(evidence_paths)
         return RpaExecutionOutput(
             success=False,
-            result_summary=summary,
+            result_summary=f"[{failure_layer}] {summary}",
             parsed_result=pr,
             evidence_paths=evidence_paths,
             error_code=code,
@@ -197,16 +211,33 @@ def run_real_admin_readonly_flow(
         evidence_paths.append(p0)
     _log("rpa_execution_started", "processing", f"profile=real_admin_prepared sku={sku_u}")
 
+    rr_status = str((readiness_snapshot or {}).get("status", "")).strip().lower()
+    if rr_status and rr_status != "ready":
+        return fail(
+            summary=f"readiness not ready: {rr_status}",
+            code=ERROR_READINESS_NOT_READY,
+            message=f"RPA readiness not ready: {rr_status}",
+            failure_layer="session_or_readiness",
+            extra={"page_message": f"readiness_not_ready:{rr_status}"},
+        )
+
     home_url, catalog_url, detail_url = build_real_admin_target_urls(sku=sku_u)
     try:
         resp = page.goto(home_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"home navigation failed: {exc}", code=ERROR_HOME_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"home navigation failed: {exc}",
+            code=ERROR_HOME_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="page_load_failed:home",
+        )
     if resp is not None and resp.status >= 400:
         return fail(
             summary=f"home HTTP {resp.status}",
             code=ERROR_HOME_LOAD_FAILED,
             message=f"home 页面打不开：HTTP {resp.status}",
+            failure_layer="page_load_failed:home",
         )
     p1 = _screenshot(page, evidence_dir / "01_home_loaded.png")
     if p1:
@@ -214,13 +245,20 @@ def run_real_admin_readonly_flow(
 
     try:
         cresp = page.goto(catalog_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"catalog navigation failed: {exc}", code=ERROR_CATALOG_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"catalog navigation failed: {exc}",
+            code=ERROR_CATALOG_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="page_load_failed:catalog",
+        )
     if cresp is not None and cresp.status >= 400:
         return fail(
             summary=f"catalog HTTP {cresp.status}",
             code=ERROR_CATALOG_LOAD_FAILED,
             message=f"catalog 页面打不开：HTTP {cresp.status}",
+            failure_layer="page_load_failed:catalog",
         )
     try:
         page.wait_for_timeout(400)
@@ -229,6 +267,7 @@ def run_real_admin_readonly_flow(
                 summary="catalog SKU search empty",
                 code=ERROR_CATALOG_SKU_NOT_FOUND,
                 message="SKU 搜索无结果（目录空态选择器可见）",
+                failure_layer="sku_not_hit",
                 extra={"page_message": "catalog_sku_not_found"},
             )
     except Exception as exc:
@@ -236,6 +275,7 @@ def run_real_admin_readonly_flow(
             summary=f"catalog empty-state check failed: {exc}",
             code=ERROR_CATALOG_LOAD_FAILED,
             message=str(exc),
+            failure_layer="selector_or_page_structure_abnormal",
         )
     p2 = _screenshot(page, evidence_dir / "02_catalog_loaded.png")
     if p2:
@@ -243,13 +283,20 @@ def run_real_admin_readonly_flow(
 
     try:
         dresp = page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except Exception as exc:
-        return fail(summary=f"detail navigation failed: {exc}", code=ERROR_DETAIL_LOAD_FAILED, message=str(exc))
+        return fail(
+            summary=f"detail navigation failed: {exc}",
+            code=ERROR_DETAIL_LOAD_FAILED,
+            message=str(exc),
+            failure_layer="page_load_failed:detail",
+        )
     if dresp is not None and dresp.status >= 400:
         return fail(
             summary=f"detail HTTP {dresp.status}",
             code=ERROR_DETAIL_LOAD_FAILED,
             message=f"detail 页面打不开：HTTP {dresp.status}",
+            failure_layer="page_load_failed:detail",
         )
     try:
         page.locator(price_sel).first.wait_for(state="visible", timeout=timeout_ms)
@@ -258,7 +305,8 @@ def run_real_admin_readonly_flow(
             summary=f"detail price selector missing: {price_sel!r}",
             code=ERROR_DETAIL_SELECTOR_MISSING,
             message=f"detail 关键选择器缺失或不可见：{price_sel!r} ({exc})",
-            extra={"detail_loaded": True, "page_message": "detail_selector_missing"},
+            failure_layer="selector_or_page_structure_abnormal",
+            extra={"detail_loaded": False, "page_message": "detail_selector_missing"},
         )
 
     p3 = _screenshot(page, evidence_dir / "03_detail_readback.png")
@@ -271,10 +319,24 @@ def run_real_admin_readonly_flow(
             summary="detail SKU mismatch vs expected",
             code=ERROR_DETAIL_SKU_MISMATCH,
             message=f"页面未命中目标 SKU：期望 {sku_u}，页面/URL 未对齐",
+            failure_layer="sku_not_hit",
             extra={
                 "detail_loaded": True,
                 "page_sku": rb["page_sku"],
                 "page_current_price": rb["page_current_price"],
+                "page_status": rb["page_status"],
+                "page_message": rb["page_message"],
+            },
+        )
+    if rb["page_current_price"] != rb["page_current_price"]:
+        return fail(
+            summary="detail readback current price is not parseable",
+            code=ERROR_READBACK_UNSTABLE,
+            message="detail 读回当前价不可解析，readback 不稳定",
+            failure_layer="readback_inconsistent",
+            extra={
+                "detail_loaded": True,
+                "page_sku": rb["page_sku"],
                 "page_status": rb["page_status"],
                 "page_message": rb["page_message"],
             },
@@ -859,6 +921,12 @@ def _parse_float_loose(raw: str) -> float | None:
         return float(m.group(0))
     except ValueError:
         return None
+
+
+def _normalize_sku_token(raw: str) -> str:
+    import re
+
+    return re.sub(r"[^A-Z0-9]+", "", (raw or "").upper())
 
 
 def _screenshot(page, path: Path) -> str | None:
