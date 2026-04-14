@@ -96,3 +96,58 @@
 2. 再看原始 update 任务当时状态是否为 `awaiting_confirmation`
 3. 看 confirm 任务 `/steps.action_executed.detail` 的 `failure_layer/operation_result/verify_reason`
 4. 最后对照 `result_summary/error_message` 是否同标签映射
+
+### 9) 治理聚合脚本（P5.3 第二轮）
+
+脚本：`script/p53_woo_write_governance_summary.py`
+
+运行：
+
+```bash
+source venv/bin/activate
+python script/p53_woo_write_governance_summary.py \
+  --base-url "http://127.0.0.1:8000" \
+  --limit 80 \
+  --task-prefix "TASK-" \
+  --recent-limit 20
+```
+
+固定输出：
+
+- `total_confirm_attempts`
+- `successful_confirms`
+- `blocked_repeat_confirms`
+- `invalid_target_confirms`
+- `other_failed_confirms`
+- `governance_distribution`
+- `recent_governance_events`
+
+统计口径（固定）：
+
+- 只统计 confirm 样本（`intent_text` 以 `确认执行` 开头）
+- 不混入 `product.update_price` 样本，避免 confirm 指标失真
+- `recent_governance_events` 至少包含：
+  - `task_id`
+  - `status`
+  - `failure_layer`
+  - `operation_result`
+  - `verify_passed`
+  - `verify_reason`
+  - `target_task_id`
+  - `original_update_task_id`
+  - `confirm_task_id`
+
+### 10) 最近治理分布怎么读（固定）
+
+按 `governance_distribution` 先看：
+
+1. `confirm_succeeded`：首次 confirm 正常放行
+2. `confirm_target_already_consumed`：重复 confirm 治理拦截
+3. `confirm_target_invalid`：无效 target 安全失败
+4. `other_failed`：其余失败，进入排查
+
+归因优先级：
+
+1. **环境类**：readiness、会话、依赖不可用
+2. **治理类**：重复 confirm / target 无效 / 样本口径不一致
+3. **写流类**：页面写入与写后核验失败（非治理拦截）

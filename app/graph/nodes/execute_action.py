@@ -273,10 +273,10 @@ def execute_action(state: dict) -> dict:
                     state["verify_reason"] = str(result.get("verify_reason", ""))
                     if result.get("api_price_after_update") is not None:
                         state["api_price_after_update"] = result.get("api_price_after_update")
-                state["target_task_id"] = result.get("target_task_id") or result.get("confirmed_task_id") or slots.get("task_id")
-                state["original_update_task_id"] = result.get("original_update_task_id") or state.get("target_task_id")
-                state["confirm_task_id"] = result.get("confirm_task_id") or state.get("task_id")
                 if isinstance(state.get("parsed_result"), dict):
+                    state["target_task_id"] = state["parsed_result"].get("target_task_id", "")
+                    state["original_update_task_id"] = state["parsed_result"].get("original_update_task_id", "")
+                    state["confirm_task_id"] = state["parsed_result"].get("confirm_task_id", "")
                     state["operation_result"] = str(state["parsed_result"].get("operation_result") or state.get("operation_result") or "")
                 state["response_mapper"] = "none"
                 state["request_adapter"] = "none"
@@ -292,9 +292,10 @@ def execute_action(state: dict) -> dict:
                 err_msg = str(result.get("error") or "确认失败")
                 failure_layer = _extract_confirm_failure_layer(result)
                 state["failure_layer"] = failure_layer
-                state["target_task_id"] = result.get("target_task_id") or slots.get("task_id")
-                state["original_update_task_id"] = result.get("original_update_task_id") or state["target_task_id"]
-                state["confirm_task_id"] = result.get("confirm_task_id") or state.get("task_id")
+                if isinstance(state.get("parsed_result"), dict):
+                    state["target_task_id"] = state["parsed_result"].get("target_task_id", "")
+                    state["original_update_task_id"] = state["parsed_result"].get("original_update_task_id", "")
+                    state["confirm_task_id"] = state["parsed_result"].get("confirm_task_id", "")
                 display_err = _strip_error_prefix(err_msg)
                 state["error_message"] = f"[{failure_layer}] {display_err}" if display_err else f"[{failure_layer}]"
                 state["status"] = "failed"
