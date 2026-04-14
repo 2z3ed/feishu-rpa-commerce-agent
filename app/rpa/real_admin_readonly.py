@@ -146,6 +146,10 @@ def run_real_admin_readonly_flow(
     profile = "real_admin_prepared"
     operation_result = "readonly_verify" if verify_only else "readonly_readback"
 
+    def _log(step: str, status: str, detail: str) -> None:
+        _ = (step, status, detail)
+        return
+
     def _base_parsed(success: bool) -> dict:
         return {
             "sku": sku_u,
