@@ -270,10 +270,14 @@ class PlaywrightUpdatePriceRunner(RpaRunner):
             logger.exception("Playwright RPA runner failed")
             return RpaExecutionOutput(
                 success=False,
-                result_summary=str(exc),
-                parsed_result={"sku": sku, "target_price": target_price},
+                result_summary=f"[browser_start_failed] {exc}",
+                parsed_result={
+                    "sku": sku,
+                    "target_price": target_price,
+                    "failure_layer": "browser_start_failed",
+                },
                 evidence_paths=paths,
-                error_code="rpa_browser_exception",
+                error_code="rpa_browser_start_failed",
                 error_message=str(exc),
             )
 

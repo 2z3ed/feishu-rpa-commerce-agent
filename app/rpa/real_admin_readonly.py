@@ -180,6 +180,22 @@ def run_real_admin_readonly_flow(
             "failure_layer": "",
         }
 
+    def _stabilize_common_fields(parsed: dict, *, success: bool) -> dict:
+        stable = dict(parsed or {})
+        stable["page_status"] = str(stable.get("page_status") or "unknown")
+        stable["page_message"] = str(stable.get("page_message") or "")
+        stable["detail_loaded"] = bool(stable.get("detail_loaded"))
+        stable["target_sku_hit"] = bool(stable.get("target_sku_hit"))
+        stable["read_source"] = str(stable.get("read_source") or read_source or "browser_real")
+        stable["evidence_count"] = int(stable.get("evidence_count") or 0)
+        if not stable["page_message"]:
+            stable["page_message"] = (
+                "real_admin_readback_ok"
+                if success and stable["target_sku_hit"] and stable["detail_loaded"]
+                else "real_admin_readback_incomplete"
+            )
+        return stable
+
     def fail(
         *,
         summary: str,
@@ -196,6 +212,7 @@ def run_real_admin_readonly_flow(
         if extra:
             pr.update(extra)
         pr["evidence_count"] = len(evidence_paths)
+        pr = _stabilize_common_fields(pr, success=False)
         return RpaExecutionOutput(
             success=False,
             result_summary=f"[{failure_layer}] {summary}",
@@ -213,12 +230,17 @@ def run_real_admin_readonly_flow(
 
     rr_status = str((readiness_snapshot or {}).get("status", "")).strip().lower()
     if rr_status and rr_status != "ready":
+        taxonomy_layer = (
+            "session_unavailable"
+            if any(token in rr_status for token in ("session", "cookie", "token", "auth", "missing"))
+            else "readiness_not_ready"
+        )
         return fail(
             summary=f"readiness not ready: {rr_status}",
             code=ERROR_READINESS_NOT_READY,
             message=f"RPA readiness not ready: {rr_status}",
-            failure_layer="session_or_readiness",
-            extra={"page_message": f"readiness_not_ready:{rr_status}"},
+            failure_layer=taxonomy_layer,
+            extra={"page_message": f"{taxonomy_layer}:{rr_status}"},
         )
 
     home_url, catalog_url, detail_url = build_real_admin_target_urls(sku=sku_u)
@@ -305,7 +327,7 @@ def run_real_admin_readonly_flow(
             summary=f"detail price selector missing: {price_sel!r}",
             code=ERROR_DETAIL_SELECTOR_MISSING,
             message=f"detail 关键选择器缺失或不可见：{price_sel!r} ({exc})",
-            failure_layer="selector_or_page_structure_abnormal",
+            failure_layer="detail_not_loaded",
             extra={"detail_loaded": False, "page_message": "detail_selector_missing"},
         )
 
@@ -333,7 +355,7 @@ def run_real_admin_readonly_flow(
             summary="detail readback current price is not parseable",
             code=ERROR_READBACK_UNSTABLE,
             message="detail 读回当前价不可解析，readback 不稳定",
-            failure_layer="readback_inconsistent",
+            failure_layer="readback_unstable",
             extra={
                 "detail_loaded": True,
                 "page_sku": rb["page_sku"],
@@ -349,6 +371,7 @@ def run_real_admin_readonly_flow(
     old_enriched = rb["page_current_price"] if rb["page_current_price"] == rb["page_current_price"] else 0.0
     pr_ok["old_price"] = old_enriched
     pr_ok["new_price"] = rb["page_new_price_field"]
+    pr_ok = _stabilize_common_fields(pr_ok, success=True)
 
     return RpaExecutionOutput(
         success=True,
