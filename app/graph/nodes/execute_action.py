@@ -273,6 +273,9 @@ def execute_action(state: dict) -> dict:
                     state["verify_reason"] = str(result.get("verify_reason", ""))
                     if result.get("api_price_after_update") is not None:
                         state["api_price_after_update"] = result.get("api_price_after_update")
+                state["target_task_id"] = result.get("target_task_id") or result.get("confirmed_task_id") or slots.get("task_id")
+                state["original_update_task_id"] = result.get("original_update_task_id") or state.get("target_task_id")
+                state["confirm_task_id"] = result.get("confirm_task_id") or state.get("task_id")
                 if isinstance(state.get("parsed_result"), dict):
                     state["operation_result"] = str(state["parsed_result"].get("operation_result") or state.get("operation_result") or "")
                 state["response_mapper"] = "none"
@@ -289,6 +292,9 @@ def execute_action(state: dict) -> dict:
                 err_msg = str(result.get("error") or "确认失败")
                 failure_layer = _extract_confirm_failure_layer(result)
                 state["failure_layer"] = failure_layer
+                state["target_task_id"] = result.get("target_task_id") or slots.get("task_id")
+                state["original_update_task_id"] = result.get("original_update_task_id") or state["target_task_id"]
+                state["confirm_task_id"] = result.get("confirm_task_id") or state.get("task_id")
                 display_err = _strip_error_prefix(err_msg)
                 state["error_message"] = f"[{failure_layer}] {display_err}" if display_err else f"[{failure_layer}]"
                 state["status"] = "failed"
@@ -565,14 +571,22 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
     confirmed_task_id = slots.get('task_id')
     current_task_id = state.get('task_id', '')
     
-    def _confirm_failure_parsed(failure_layer: str) -> dict:
+    def _confirm_failure_parsed(
+        failure_layer: str,
+        *,
+        target_task_id: str | None,
+        verify_reason: str | None = None,
+    ) -> dict:
         return {
+            "confirm_task_id": current_task_id or None,
+            "target_task_id": target_task_id,
+            "original_update_task_id": target_task_id,
             "old_price": None,
             "new_price": None,
             "post_save_price": None,
             "verify_passed": False,
-            "verify_reason": failure_layer,
-            "operation_result": "write_update_price",
+            "verify_reason": verify_reason or failure_layer,
+            "operation_result": "confirm_blocked_noop",
             "failure_layer": failure_layer,
         }
 
@@ -580,7 +594,10 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         return {
             "error": "[confirm_target_invalid] 缺少任务号",
             "error_code": "confirm_target_invalid",
-            "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+            "target_task_id": None,
+            "original_update_task_id": None,
+            "confirm_task_id": current_task_id or None,
+            "parsed_result": _confirm_failure_parsed("confirm_target_invalid", target_task_id=None),
         }
     
     # Query the task record to confirm (use the extracted task_id from text, NOT current task's id)
@@ -597,15 +614,32 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             return {
                 "error": f"[confirm_target_invalid] 任务 {confirmed_task_id} 不存在",
                 "error_code": "confirm_target_invalid",
-                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+                "target_task_id": confirmed_task_id,
+                "original_update_task_id": confirmed_task_id,
+                "confirm_task_id": current_task_id or None,
+                "parsed_result": _confirm_failure_parsed("confirm_target_invalid", target_task_id=confirmed_task_id),
             }
         
-        # Check if task is in awaiting_confirmation status
+        # Single source of truth for confirm idempotency:
+        # only awaiting_confirmation can be consumed by confirm.
         if task_record.status != 'awaiting_confirmation':
+            if task_record.status in {"succeeded", "failed", "processing"}:
+                layer = "confirm_target_already_consumed"
+                reason = f"already_consumed_status={task_record.status}"
+            else:
+                layer = "confirm_target_invalid"
+                reason = f"invalid_target_status={task_record.status}"
             return {
-                "error": f"[confirm_target_invalid] 任务 {confirmed_task_id} 状态为 {task_record.status}，无需确认",
-                "error_code": "confirm_target_invalid",
-                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+                "error": f"[{layer}] 任务 {confirmed_task_id} 状态为 {task_record.status}，无需确认",
+                "error_code": layer,
+                "target_task_id": confirmed_task_id,
+                "original_update_task_id": confirmed_task_id,
+                "confirm_task_id": current_task_id or None,
+                "parsed_result": _confirm_failure_parsed(
+                    layer,
+                    target_task_id=confirmed_task_id,
+                    verify_reason=reason,
+                ),
             }
         
         # Parse the original intent from task record
@@ -627,7 +661,10 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             return {
                 "error": "[confirm_target_invalid] 无法从原任务中提取 SKU 和价格信息",
                 "error_code": "confirm_target_invalid",
-                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+                "target_task_id": confirmed_task_id,
+                "original_update_task_id": confirmed_task_id,
+                "confirm_task_id": current_task_id or None,
+                "parsed_result": _confirm_failure_parsed("confirm_target_invalid", target_task_id=confirmed_task_id),
             }
         
         sku = sku_match.group(1)
@@ -663,6 +700,15 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                         f"count={len(paths)} sample={paths[0][:200] if paths else ''}",
                     )
                 out_fail: dict = {"error": rpa_err.get("error", "RPA 执行失败")}
+                out_fail["target_task_id"] = confirmed_task_id
+                out_fail["original_update_task_id"] = confirmed_task_id
+                out_fail["confirm_task_id"] = current_task_id or None
+                if not isinstance(out_fail.get("parsed_result"), dict):
+                    out_fail["parsed_result"] = _confirm_failure_parsed(
+                        str(ec),
+                        target_task_id=confirmed_task_id,
+                        verify_reason=str(ec),
+                    )
                 if rpa_err.get("_rpa_meta"):
                     out_fail["_rpa_meta"] = rpa_err["_rpa_meta"]
                 return out_fail
@@ -672,7 +718,17 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             result.pop("rpa_evidence_paths", None)
             if not result:
                 log_step(current_task_id, "rpa_execution_failed", "failed", "empty legacy result")
-                return {"error": "RPA 返回无效结果"}
+                return {
+                    "error": "RPA 返回无效结果",
+                    "error_code": "unknown_exception",
+                    "target_task_id": confirmed_task_id,
+                    "original_update_task_id": confirmed_task_id,
+                    "confirm_task_id": current_task_id or None,
+                    "parsed_result": _confirm_failure_parsed(
+                        "unknown_exception",
+                        target_task_id=confirmed_task_id,
+                    ),
+                }
 
             now_ts = get_shanghai_now()
             task_record.status = "succeeded"
@@ -683,6 +739,16 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             db.commit()
 
             result["confirmed_task_id"] = confirmed_task_id
+            result["target_task_id"] = confirmed_task_id
+            result["original_update_task_id"] = confirmed_task_id
+            result["confirm_task_id"] = current_task_id or None
+            pr_ok = result.get("parsed_result")
+            if not isinstance(pr_ok, dict):
+                pr_ok = {}
+            pr_ok.setdefault("confirm_task_id", current_task_id or None)
+            pr_ok.setdefault("target_task_id", confirmed_task_id)
+            pr_ok.setdefault("original_update_task_id", confirmed_task_id)
+            result["parsed_result"] = pr_ok
             if rpa_meta:
                 result["_rpa_meta"] = rpa_meta
             log_step(
@@ -722,6 +788,15 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                         f"count={len(paths)} sample={paths[0][:200] if paths else ''}",
                     )
                 out_av: dict = {"error": av_err.get("error", "api_then_rpa_verify 失败")}
+                out_av["target_task_id"] = confirmed_task_id
+                out_av["original_update_task_id"] = confirmed_task_id
+                out_av["confirm_task_id"] = current_task_id or None
+                if not isinstance(out_av.get("parsed_result"), dict):
+                    out_av["parsed_result"] = _confirm_failure_parsed(
+                        str(ec),
+                        target_task_id=confirmed_task_id,
+                        verify_reason=str(ec),
+                    )
                 if av_err.get("_rpa_meta"):
                     out_av["_rpa_meta"] = av_err["_rpa_meta"]
                 return out_av
@@ -731,7 +806,17 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             result.pop("rpa_evidence_paths", None)
             if not result:
                 log_step(current_task_id, "confirm_api_then_rpa_verify_failed", "failed", "empty legacy result")
-                return {"error": "api_then_rpa_verify 返回无效结果"}
+                return {
+                    "error": "api_then_rpa_verify 返回无效结果",
+                    "error_code": "unknown_exception",
+                    "target_task_id": confirmed_task_id,
+                    "original_update_task_id": confirmed_task_id,
+                    "confirm_task_id": current_task_id or None,
+                    "parsed_result": _confirm_failure_parsed(
+                        "unknown_exception",
+                        target_task_id=confirmed_task_id,
+                    ),
+                }
 
             now_ts = get_shanghai_now()
             task_record.status = "succeeded"
@@ -742,6 +827,16 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             db.commit()
 
             result["confirmed_task_id"] = confirmed_task_id
+            result["target_task_id"] = confirmed_task_id
+            result["original_update_task_id"] = confirmed_task_id
+            result["confirm_task_id"] = current_task_id or None
+            pr_ok = result.get("parsed_result")
+            if not isinstance(pr_ok, dict):
+                pr_ok = {}
+            pr_ok.setdefault("confirm_task_id", current_task_id or None)
+            pr_ok.setdefault("target_task_id", confirmed_task_id)
+            pr_ok.setdefault("original_update_task_id", confirmed_task_id)
+            result["parsed_result"] = pr_ok
             if rpa_meta:
                 result["_rpa_meta"] = rpa_meta
             log_step(
@@ -765,13 +860,37 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
             db.commit()
             
             result['confirmed_task_id'] = confirmed_task_id
+            result["target_task_id"] = confirmed_task_id
+            result["original_update_task_id"] = confirmed_task_id
+            result["confirm_task_id"] = current_task_id or None
+            pr_ok = result.get("parsed_result")
+            if not isinstance(pr_ok, dict):
+                pr_ok = {}
+            pr_ok.setdefault("confirm_task_id", current_task_id or None)
+            pr_ok.setdefault("target_task_id", confirmed_task_id)
+            pr_ok.setdefault("original_update_task_id", confirmed_task_id)
+            result["parsed_result"] = pr_ok
             return result
         else:
-            return {'error': f'SKU {sku} 不存在'}
+            return {
+                "error": f"SKU {sku} 不存在",
+                "error_code": "sku_not_found",
+                "target_task_id": confirmed_task_id,
+                "original_update_task_id": confirmed_task_id,
+                "confirm_task_id": current_task_id or None,
+                "parsed_result": _confirm_failure_parsed("sku_not_found", target_task_id=confirmed_task_id),
+            }
             
     except Exception as e:
         db.rollback()
-        return {'error': f'确认执行失败：{str(e)}'}
+        return {
+            "error": f"确认执行失败：{str(e)}",
+            "error_code": "unknown_exception",
+            "target_task_id": confirmed_task_id,
+            "original_update_task_id": confirmed_task_id,
+            "confirm_task_id": current_task_id or None,
+            "parsed_result": _confirm_failure_parsed("unknown_exception", target_task_id=confirmed_task_id),
+        }
     finally:
         db.close()
 

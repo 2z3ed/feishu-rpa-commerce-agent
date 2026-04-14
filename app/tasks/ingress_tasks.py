@@ -96,6 +96,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         old_price = pr.get("old_price", None)
         new_price = pr.get("new_price", None)
         post_save_price = pr.get("post_save_price", None)
+        target_task_id = result.get("target_task_id", pr.get("target_task_id", ""))
+        original_update_task_id = result.get("original_update_task_id", pr.get("original_update_task_id", ""))
+        confirm_task_id = result.get("confirm_task_id", pr.get("confirm_task_id", task_id))
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         log_step(
             task_id,
@@ -116,7 +119,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 f"endpoint_profile={endpoint_profile}, session_injection_mode={session_injection_mode}, "
                 f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}, "
                 f"verify_passed={verify_passed}, verify_reason={verify_reason}, operation_result={operation_result}, "
-                f"failure_layer={failure_layer}, old_price={old_price}, new_price={new_price}, post_save_price={post_save_price}"
+                f"failure_layer={failure_layer}, old_price={old_price}, new_price={new_price}, post_save_price={post_save_price}, "
+                f"target_task_id={target_task_id}, original_update_task_id={original_update_task_id}, confirm_task_id={confirm_task_id}"
             ),
         )
         

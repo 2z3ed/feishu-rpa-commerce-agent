@@ -5,11 +5,17 @@ import importlib.util
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.rpa.schema import RpaExecutionOutput
 from app.graph.nodes import execute_action
 from app.repositories.product_repo import product_repo
+from app.db.base import Base
+from app.db.models import TaskRecord
+from app.core.time import get_shanghai_now
 from app.rpa.confirm_update_price import (
     ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED,
     run_confirm_update_price_api_then_rpa_verify,
@@ -1083,3 +1089,100 @@ def test_execute_task_confirmation_confirm_target_invalid_has_stable_parsed_resu
     ):
         assert key in pr
     assert pr["failure_layer"] == "confirm_target_invalid"
+    assert "target_task_id" in pr
+    assert "original_update_task_id" in pr
+    assert "operation_result" in pr
+    assert "verify_passed" in pr
+    assert "verify_reason" in pr
+
+
+def test_execute_task_confirmation_repeated_confirm_blocked_by_single_status_source(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        update_task_id = "TASK-UP-ONE"
+        confirm_task_1 = "TASK-CFM-ONE"
+        confirm_task_2 = "TASK-CFM-TWO"
+        summary = (
+            "[product.update_price] ⚠️ 检测到高风险操作：修改价格\n"
+            "SKU: A001\n当前价格：59.9\n目标价格：39.9\n任务号：TASK-UP-ONE"
+        )
+        db.add(
+            TaskRecord(
+                task_id=update_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="修改 SKU A001 价格到 39.9",
+                result_summary=summary,
+                created_at=get_shanghai_now(),
+                updated_at=get_shanghai_now(),
+            )
+        )
+        db.add(
+            TaskRecord(
+                task_id=confirm_task_1,
+                source_platform="feishu",
+                status="processing",
+                intent_text=f"确认执行 {update_task_id}",
+                created_at=get_shanghai_now(),
+                updated_at=get_shanghai_now(),
+            )
+        )
+        db.add(
+            TaskRecord(
+                task_id=confirm_task_2,
+                source_platform="feishu",
+                status="processing",
+                intent_text=f"确认执行 {update_task_id}",
+                created_at=get_shanghai_now(),
+                updated_at=get_shanghai_now(),
+            )
+        )
+        db.commit()
+
+        monkeypatch.setattr(execute_action, "SessionLocal", lambda: db)
+        monkeypatch.setattr(settings, "PRODUCT_UPDATE_PRICE_CONFIRM_EXECUTION_BACKEND", "mock")
+        calls = {"count": 0}
+
+        class _FakeExecutor:
+            def update_price(self, sku, target_price):
+                calls["count"] += 1
+                return {
+                    "status": "success",
+                    "sku": sku,
+                    "old_price": 59.9,
+                    "new_price": float(target_price),
+                    "post_save_price": float(target_price),
+                    "platform": "woo",
+                }
+
+        first = execute_action.execute_task_confirmation(
+            executor=_FakeExecutor(),
+            state={"task_id": confirm_task_1},
+            slots={"task_id": update_task_id},
+        )
+        assert first.get("status") == "success"
+        assert calls["count"] == 1
+
+        second = execute_action.execute_task_confirmation(
+            executor=_FakeExecutor(),
+            state={"task_id": confirm_task_2},
+            slots={"task_id": update_task_id},
+        )
+        assert second["error_code"] == "confirm_target_already_consumed"
+        assert calls["count"] == 1
+        pr = second.get("parsed_result") or {}
+        assert pr["failure_layer"] == "confirm_target_already_consumed"
+        assert pr["target_task_id"] == update_task_id
+        assert pr["original_update_task_id"] == update_task_id
+        assert pr["operation_result"] == "confirm_blocked_noop"
+        assert pr["verify_passed"] is False
+        assert "already_consumed_status=" in str(pr["verify_reason"])
+    finally:
+        db.close()
