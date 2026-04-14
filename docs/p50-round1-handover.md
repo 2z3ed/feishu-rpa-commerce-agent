@@ -90,3 +90,5 @@
 ## 下一步（仍在 P5.0 范围）
 - 保持“只扩骨架不做深挖”，继续完善统一 readiness、路由口径和最小可观测性。
 - 继续补齐多平台字段口径的自动化回归（尤其是 tasks list/detail/steps + action_executed.detail 的稳定性）。
+
+> P5.0 第二轮验收 SOP 参见：`docs/p50-round2-sop.md`
