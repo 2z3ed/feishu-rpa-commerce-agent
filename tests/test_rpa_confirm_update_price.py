@@ -137,6 +137,18 @@ def test_execute_action_confirm_merges_rpa_meta(monkeypatch):
             "sku": "A001",
             "old_price": 10.0,
             "new_price": 20.0,
+            "verify_passed": True,
+            "verify_reason": "ok",
+            "operation_result": "write_update_price",
+            "parsed_result": {
+                "failure_layer": "",
+                "old_price": 10.0,
+                "new_price": 20.0,
+                "post_save_price": 20.0,
+                "verify_passed": True,
+                "verify_reason": "ok",
+                "operation_result": "write_update_price",
+            },
             "platform": "woo",
             "_rpa_meta": {
                 "execution_mode": "rpa",
@@ -166,12 +178,18 @@ def test_execute_action_confirm_merges_rpa_meta(monkeypatch):
     assert out["rpa_runner"] == "local_fake"
     assert out["verify_mode"] == "basic"
     assert out["final_backend"] == "rpa_local_fake"
+    assert out["verify_passed"] is True
+    assert out["verify_reason"] == "ok"
+    assert isinstance(out.get("parsed_result"), dict)
+    assert out["parsed_result"]["verify_passed"] is True
 
 
 def test_execute_action_confirm_failure_merges_rpa_meta(monkeypatch):
     def fake_confirm_fail(_executor, state, slots):
         return {
-            "error": "LocalFakeRpaRunner: force_failure enabled",
+            "error": "[confirm_target_invalid] LocalFakeRpaRunner: force_failure enabled",
+            "error_code": "confirm_target_invalid",
+            "parsed_result": {"failure_layer": "confirm_target_invalid"},
             "_rpa_meta": {
                 "execution_mode": "rpa",
                 "execution_backend": "rpa_local_fake",
@@ -224,6 +242,17 @@ def test_run_confirm_update_price_rpa_failure_includes_meta(monkeypatch, tmp_pat
     assert err["_rpa_meta"]["evidence_count"] >= 1
     assert err["_rpa_meta"]["platform"] == "woo"
     assert err["_rpa_meta"]["selected_backend"] == "rpa_local_fake"
+    pr = err.get("parsed_result") or {}
+    for key in (
+        "old_price",
+        "new_price",
+        "post_save_price",
+        "verify_passed",
+        "verify_reason",
+        "operation_result",
+        "failure_layer",
+    ):
+        assert key in pr
 
 
 def test_get_update_price_runner_browser_real(monkeypatch):
@@ -262,6 +291,7 @@ def test_playwright_runner_success_mocked(monkeypatch, tmp_path):
     ev.mkdir()
     monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "sandbox")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
     monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
 
@@ -446,6 +476,7 @@ def test_playwright_runner_dispatches_admin_like(monkeypatch, tmp_path):
     ev = tmp_path / "e"
     ev.mkdir()
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "admin_like")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
     monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
     monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
@@ -515,6 +546,7 @@ def test_playwright_runner_dispatches_list_detail(monkeypatch, tmp_path):
     ev = tmp_path / "e"
     ev.mkdir()
     monkeypatch.setattr(settings, "RPA_TARGET_ENV", "list_detail")
+    monkeypatch.setattr(settings, "RPA_TARGET_PROFILE", "internal_controlled")
     monkeypatch.setattr(settings, "RPA_SANDBOX_BASE_URL", "http://127.0.0.1:8000")
     monkeypatch.setattr(settings, "RPA_BROWSER_HEADLESS", True)
     monkeypatch.setattr(settings, "RPA_BROWSER_TIMEOUT_S", 30)
@@ -1007,3 +1039,22 @@ def test_real_admin_write_failure_save_button_disabled(monkeypatch, tmp_path):
         )
     assert out.success is False
     assert out.error_code == ERROR_DETAIL_SAVE_BUTTON_DISABLED
+
+
+def test_execute_task_confirmation_confirm_target_invalid_has_stable_parsed_result():
+    state = {"task_id": "TASK-CFM-INVALID"}
+    slots = {}
+    out = execute_action.execute_task_confirmation(executor=None, state=state, slots=slots)
+    assert out["error_code"] == "confirm_target_invalid"
+    pr = out.get("parsed_result") or {}
+    for key in (
+        "old_price",
+        "new_price",
+        "post_save_price",
+        "verify_passed",
+        "verify_reason",
+        "operation_result",
+        "failure_layer",
+    ):
+        assert key in pr
+    assert pr["failure_layer"] == "confirm_target_invalid"

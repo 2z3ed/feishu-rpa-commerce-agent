@@ -114,3 +114,65 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/<confirm_task_id>/steps"
 - `post_write_verify_mismatch`
 - `unknown_exception`
 
+### 8) P5.2 第二轮稳定化口径（固定）
+
+`parsed_result` 是写后核验与失败分层的单一事实源。以下字段在 success / fail 样本中都必须可读（允许 `null` 语义，不允许字段缺失）：
+
+- `old_price`
+- `new_price`
+- `post_save_price`
+- `verify_passed`
+- `verify_reason`
+- `operation_result`
+- `failure_layer`
+
+`result_summary`、`error_message`、`/steps.action_executed.detail` 只做映射展示，不再自行判定一套不同结论。
+
+### 9) 成功闭环怎么验（第二轮）
+
+确认任务成功后，至少同时检查：
+
+1. `/api/v1/tasks/<confirm_task_id>`: `status=succeeded`
+2. `/api/v1/tasks/<confirm_task_id>/steps`: 存在 `detail_before_edit`、`detail_after_input`、`detail_after_submit`、`verification_result_recorded`
+3. `action_executed.detail` 含：
+   - `verify_passed=True`
+   - `verify_reason=ok`
+   - `operation_result=write_update_price`
+   - `old_price/new_price/post_save_price`
+
+### 10) 失败闭环怎么验（第二轮）
+
+安全失败样本优先走 `confirm_target_invalid`（如确认不存在 task_id），避免主动破坏受控写环境。
+
+检查：
+
+1. `/api/v1/tasks/<confirm_task_id>`: `status=failed`
+2. `/api/v1/tasks/<confirm_task_id>/steps`: `action_executed.detail` 含 `failure_layer=confirm_target_invalid`
+3. `parsed_result` 必有：
+   - `old_price/new_price/post_save_price`
+   - `verify_passed/verify_reason`
+   - `operation_result/failure_layer`
+
+### 11) 重复回归怎么跑（固定标准）
+
+第二轮固定最小回归标准：
+
+- 至少 `3` 次真实成功闭环（同环境、同命令模板、同 SKU、同字段检查）
+- 至少 `1` 个安全失败样本（建议 `confirm_target_invalid`）
+
+回归汇总必须输出：
+
+- 总次数 / 成功次数 / 失败次数
+- 失败 taxonomy 分布
+- 成功样本中 6 个核验字段的一致性结果
+
+### 12) 失败归因优先级
+
+先按以下优先级归因，避免误判：
+
+1. **环境类**：readiness、会话缺失、配置缺失（如 `rpa_target_readiness_failed`）
+2. **页面/写流逻辑类**：`edit_mode_not_entered`、`new_price_fill_failed`、`save_button_unavailable`、`save_feedback_failed`
+3. **核验不一致类**：`post_write_verify_mismatch`
+
+`unknown_exception` 仅作兜底，不作为常规回归目标。
+

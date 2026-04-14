@@ -233,6 +233,9 @@ def execute_action(state: dict) -> dict:
             if result.get("status") == "success":
                 rpa_meta = result.pop("_rpa_meta", None)
                 result.pop("rpa_evidence_paths", None)
+                pr = result.get("parsed_result")
+                if isinstance(pr, dict):
+                    state["parsed_result"] = pr
                 state["result_summary"] = format_task_confirmation_result(result)
                 state["status"] = "succeeded"
                 if rpa_meta:
@@ -255,6 +258,8 @@ def execute_action(state: dict) -> dict:
                     state["verify_reason"] = str(result.get("verify_reason", ""))
                     if result.get("api_price_after_update") is not None:
                         state["api_price_after_update"] = result.get("api_price_after_update")
+                if isinstance(state.get("parsed_result"), dict):
+                    state["operation_result"] = str(state["parsed_result"].get("operation_result") or state.get("operation_result") or "")
                 state["response_mapper"] = "none"
                 state["request_adapter"] = "none"
                 state["auth_profile"] = "none"
@@ -263,6 +268,9 @@ def execute_action(state: dict) -> dict:
                 logger.info("Task confirmed and executed successfully: task_id=%s", slots.get('task_id'))
             else:
                 rpa_meta_fail = result.pop("_rpa_meta", None)
+                prf = result.get("parsed_result")
+                if isinstance(prf, dict):
+                    state["parsed_result"] = prf
                 err_msg = result.get("error", "确认失败")
                 state["error_message"] = err_msg
                 state["status"] = "failed"
@@ -539,8 +547,23 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
     confirmed_task_id = slots.get('task_id')
     current_task_id = state.get('task_id', '')
     
+    def _confirm_failure_parsed(failure_layer: str) -> dict:
+        return {
+            "old_price": None,
+            "new_price": None,
+            "post_save_price": None,
+            "verify_passed": False,
+            "verify_reason": failure_layer,
+            "operation_result": "write_update_price",
+            "failure_layer": failure_layer,
+        }
+
     if not confirmed_task_id:
-        return {'error': '缺少任务号'}
+        return {
+            "error": "[confirm_target_invalid] 缺少任务号",
+            "error_code": "confirm_target_invalid",
+            "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+        }
     
     # Query the task record to confirm (use the extracted task_id from text, NOT current task's id)
     db = SessionLocal()
@@ -553,11 +576,19 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         
         task_record = db.query(TaskRecord).filter(TaskRecord.task_id == confirmed_task_id).first()
         if not task_record:
-            return {'error': f'任务 {confirmed_task_id} 不存在'}
+            return {
+                "error": f"[confirm_target_invalid] 任务 {confirmed_task_id} 不存在",
+                "error_code": "confirm_target_invalid",
+                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+            }
         
         # Check if task is in awaiting_confirmation status
         if task_record.status != 'awaiting_confirmation':
-            return {'error': f'任务 {confirmed_task_id} 状态为 {task_record.status}，无需确认'}
+            return {
+                "error": f"[confirm_target_invalid] 任务 {confirmed_task_id} 状态为 {task_record.status}，无需确认",
+                "error_code": "confirm_target_invalid",
+                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+            }
         
         # Parse the original intent from task record
         # The intent_text should contain the original price update command
@@ -575,7 +606,11 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         price_match = re.search(r'目标价格：\s*(\d+(?:\.\d+)?)', result_summary)
         
         if not sku_match or not price_match:
-            return {'error': '无法从原任务中提取 SKU 和价格信息'}
+            return {
+                "error": "[confirm_target_invalid] 无法从原任务中提取 SKU 和价格信息",
+                "error_code": "confirm_target_invalid",
+                "parsed_result": _confirm_failure_parsed("confirm_target_invalid"),
+            }
         
         sku = sku_match.group(1)
         target_price = float(price_match.group(1))

@@ -16,6 +16,24 @@ ERROR_API_THEN_RPA_VERIFY_PROFILE_NOT_SUPPORTED = "rpa_real_admin_api_then_rpa_v
 INTENT_PRODUCT_UPDATE_PRICE = "product.update_price"
 
 
+def _stable_write_verify_fields(
+    *,
+    parsed_result: dict | None,
+    target_price: float,
+    default_operation_result: str,
+    default_failure_layer: str,
+) -> dict:
+    pr = dict(parsed_result or {})
+    pr.setdefault("old_price", None)
+    pr.setdefault("new_price", float(target_price))
+    pr.setdefault("post_save_price", None)
+    pr.setdefault("verify_passed", False)
+    pr.setdefault("verify_reason", "not_executed")
+    pr.setdefault("operation_result", default_operation_result)
+    pr.setdefault("failure_layer", default_failure_layer)
+    return pr
+
+
 def _readiness_fail_meta(rr: RpaTargetReadinessResult, *, flow: str, evidence_dir: str) -> dict:
     vm = str(settings.RPA_UPDATE_PRICE_VERIFY_MODE or "basic")
     common = {
@@ -249,6 +267,12 @@ def run_confirm_update_price_rpa(
     if vm not in ("none", "basic", "strict"):
         vm = "basic"
     if pf := _maybe_browser_rpa_preflight(confirm_task_id, flow="rpa", evidence_dir=evidence_dir):
+        pf["parsed_result"] = _stable_write_verify_fields(
+            parsed_result=pf.get("parsed_result") if isinstance(pf.get("parsed_result"), dict) else {},
+            target_price=float(target_price),
+            default_operation_result="write_update_price",
+            default_failure_layer="unknown_exception",
+        )
         return None, pf
     sku_u_pre = sku.strip().upper()
     pd0 = product_repo.query_sku_status(sku_u_pre, "mock")
@@ -282,9 +306,12 @@ def run_confirm_update_price_rpa(
             "failed",
             f"error_code={out.error_code} msg={(out.error_message or '')[:400]}",
         )
-        parsed_fail = out.parsed_result if isinstance(out.parsed_result, dict) else {}
-        if "failure_layer" not in parsed_fail:
-            parsed_fail["failure_layer"] = "unknown_exception"
+        parsed_fail = _stable_write_verify_fields(
+            parsed_result=out.parsed_result if isinstance(out.parsed_result, dict) else {},
+            target_price=float(target_price),
+            default_operation_result="write_update_price",
+            default_failure_layer="unknown_exception",
+        )
         fail_meta = _rpa_observability_meta(
             runner=runner,
             evidence_dir=evidence_dir,
@@ -301,7 +328,12 @@ def run_confirm_update_price_rpa(
             "_rpa_meta": fail_meta,
         }
 
-    pr = out.parsed_result
+    pr = _stable_write_verify_fields(
+        parsed_result=out.parsed_result if isinstance(out.parsed_result, dict) else {},
+        target_price=float(target_price),
+        default_operation_result="readonly_readback",
+        default_failure_layer="",
+    )
     sku_u = (pr.get("sku") or sku).strip().upper()
     dry_run = bool(pr.get("dry_run", inp.dry_run))
 
@@ -369,6 +401,7 @@ def run_confirm_update_price_rpa(
                 "sku": sku_u,
                 "old_price": compared_price,
                 "new_price": float(target_price),
+                "post_save_price": pr.get("post_save_price"),
                 "status": "success" if verify_passed else "failed",
                 "platform": pr.get("platform", platform),
                 "product_name": pr.get("product_name"),
@@ -386,6 +419,8 @@ def run_confirm_update_price_rpa(
                 "expected_target_price": float(target_price),
                 "compared_price": compared_price,
                 "api_price_after_update": None,
+                "operation_result": pr.get("operation_result", "readonly_readback"),
+                "failure_layer": pr.get("failure_layer", ""),
             }
         meta = _rpa_observability_meta(
             runner=runner,
@@ -438,6 +473,12 @@ def run_confirm_update_price_rpa(
                 "error": f"SKU {sku_u} 不存在",
                 "error_code": "sku_not_found",
                 "evidence_paths": out.evidence_paths,
+                "parsed_result": _stable_write_verify_fields(
+                    parsed_result=pr,
+                    target_price=float(target_price),
+                    default_operation_result="write_update_price",
+                    default_failure_layer="sku_not_hit",
+                ),
                 "_rpa_meta": sku_meta,
             }
 
