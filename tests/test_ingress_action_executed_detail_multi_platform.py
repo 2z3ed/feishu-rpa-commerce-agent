@@ -157,6 +157,7 @@ def test_action_executed_detail_contains_multi_platform_fields(monkeypatch):
         detail_logs = [d for code, _st, d in logs if code == "action_executed"]
         assert len(detail_logs) == 3
         required_keys = {
+            "execution_mode",
             "provider_id",
             "capability",
             "readiness_status",
@@ -180,7 +181,18 @@ def test_action_executed_detail_contains_multi_platform_fields(monkeypatch):
             assert required_keys.issubset(set(d.keys()))
             for k in required_keys:
                 assert isinstance(d.get(k), str)
-                assert (d.get(k) or "").strip()
+                val = (d.get(k) or "").strip()
+                assert val
+                assert val.lower() not in {"none", "null"}
+
+        # P6.0 收紧：Odoo readonly 关键字段不得出现 unknown/none
+        d_odoo = parsed[1]
+        assert d_odoo.get("execution_mode") == "api"
+        assert d_odoo.get("provider_id") == "odoo"
+        assert d_odoo.get("capability") == "warehouse.query_inventory"
+        assert d_odoo.get("readiness_status") == "ready"
+        assert (d_odoo.get("endpoint_profile") or "").strip().lower() not in {"", "none", "unknown"}
+        assert (d_odoo.get("session_injection_mode") or "").strip().lower() not in {"", "none", "unknown"}
     finally:
         db.close()
 

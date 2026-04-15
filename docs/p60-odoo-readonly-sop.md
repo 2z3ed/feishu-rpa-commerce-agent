@@ -99,3 +99,40 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/${TASK_ID}/steps"
    - 重点看 `execution_mode` 是否为 `api`（避免被旧 `mock` 口径误导）
 4. **internal sandbox 关闭**：确认 `ENABLE_INTERNAL_SANDBOX_API=true`
 
+## 7) 收口版：硬检查项 + 常见失败示例
+
+### 7.1 硬检查项（必须全部满足）
+
+**/tasks：**
+- `status=succeeded`
+- `result_summary` 以 `[warehouse.query_inventory]` 开头
+- summary 必须包含：`SKU:`、`商品：`、`库存：`、`状态：`、`平台：odoo`、`provider_id：odoo`、`capability：warehouse.query_inventory`、`readiness：ready`
+
+**/steps（action_executed.detail）：**
+- 必须包含并且值非空、非 `none/null/unknown`：
+  - `execution_mode=api`
+  - `provider_id=odoo`
+  - `capability=warehouse.query_inventory`
+  - `readiness_status=ready`
+  - `endpoint_profile=<non-empty>`
+  - `session_injection_mode=<non-empty>`
+
+### 7.2 常见失败示例
+
+**失败示例 1：execution_mode 回退**
+- 现象：`action_executed.detail` 出现 `execution_mode=mock`
+- 含义：口径退化（会误导“这条链是不是走了 mock”）
+- 排查：先确认代码版本，再看 `/steps` 是否仍含上述 6 个硬字段
+
+**失败示例 2：endpoint_profile/session_injection_mode 为空或 none**
+- 现象：`endpoint_profile=none` 或 `session_injection_mode=none`
+- 含义：provider/profile 口径回退或执行链漏填字段
+- 排查顺序：
+  1) `GET /api/v1/internal/readiness/unified-provider?provider=odoo&capability=warehouse.query_inventory`
+  2) `/steps` 的 `action_executed.detail` 看 profile 字段是否被覆盖为 `unknown/none`
+
+**失败示例 3：字段缺失（detail 不可断言）**
+- 现象：detail 里缺少 `provider_id/capability/readiness_status/...`
+- 含义：detail 输出逻辑回退
+- 排查：直接对比最近一次成功样本的 `/steps`，确认缺了哪个字段，再回看 `action_executed` 写入逻辑
+

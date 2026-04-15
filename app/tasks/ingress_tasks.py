@@ -14,6 +14,58 @@ from app.utils.task_logger import log_step
 from app.core.time import get_shanghai_now
 
 
+_ACTION_EXECUTED_REQUIRED_FIELDS: tuple[str, ...] = (
+    "execution_mode",
+    "provider_id",
+    "capability",
+    "readiness_status",
+    "endpoint_profile",
+    "session_injection_mode",
+)
+
+
+def _normalize_detail_value(key: str, value) -> str:
+    v = "" if value is None else str(value)
+    v = v.strip()
+    # Keep values single-line and easy to parse.
+    v = v.replace("\n", "\\n").replace("\r", "\\r")
+    if not v or v.lower() in {"none", "null"}:
+        # For required fields, never emit empty/none. Use explicit unknown placeholder.
+        if key in _ACTION_EXECUTED_REQUIRED_FIELDS:
+            return "unknown"
+        return ""
+    return v
+
+
+def build_action_executed_detail(fields: dict) -> str:
+    """Stable, parseable KV detail string for action_executed step.
+
+    - Required fields always present and never empty/none.
+    - Key order is stable (required keys first, then the rest sorted).
+    """
+    safe: dict[str, str] = {}
+    for k, v in (fields or {}).items():
+        if not k:
+            continue
+        key = str(k).strip()
+        if not key:
+            continue
+        safe[key] = _normalize_detail_value(key, v)
+
+    for req in _ACTION_EXECUTED_REQUIRED_FIELDS:
+        safe.setdefault(req, "unknown")
+        if not safe[req] or safe[req].lower() in {"none", "null"}:
+            safe[req] = "unknown"
+
+    ordered_keys = [*list(_ACTION_EXECUTED_REQUIRED_FIELDS)]
+    ordered_keys.extend(sorted(k for k in safe.keys() if k not in _ACTION_EXECUTED_REQUIRED_FIELDS))
+
+    parts: list[str] = []
+    for k in ordered_keys:
+        parts.append(f"{k}={safe.get(k, '')}")
+    return ", ".join(parts)
+
+
 @celery_app.task(bind=True, name="ingress.process_message")
 def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: str | None = None, 
                            source_message_id: str = "", chat_id: str = ""):
@@ -100,28 +152,55 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         original_update_task_id = pr.get("original_update_task_id", "")
         confirm_task_id = pr.get("confirm_task_id", "")
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
+        detail = build_action_executed_detail(
+            {
+                "intent": intent_code,
+                "execution_mode": execution_mode,
+                "platform": platform,
+                "backend": execution_backend,
+                "client": client_profile,
+                "mapper": response_mapper,
+                "request_adapter": request_adapter,
+                "auth_profile": auth_profile,
+                "provider_profile": provider_profile,
+                "credential_profile": credential_profile,
+                "production_config_ready": production_config_ready,
+                "dry_run_enabled": dry_run_enabled,
+                "selected_backend": selected_backend,
+                "backend_selection_reason": backend_selection_reason,
+                "fallback_enabled": fallback_enabled,
+                "fallback_applied": fallback_applied,
+                "fallback_target": fallback_target,
+                "final_backend": final_backend,
+                "dry_run_failure": dry_run_failure,
+                "recommended_strategy": recommended_strategy,
+                "environment_ready": environment_ready,
+                "live_probe_enabled": live_probe_enabled,
+                "provider_id": provider_id,
+                "capability": capability,
+                "readiness_status": readiness_status,
+                "endpoint_profile": endpoint_profile,
+                "session_injection_mode": session_injection_mode,
+                "evidence_count": evidence_count,
+                "rpa_runner": rpa_runner,
+                "verify_mode": verify_mode,
+                "verify_passed": verify_passed,
+                "verify_reason": verify_reason,
+                "operation_result": operation_result,
+                "failure_layer": failure_layer,
+                "old_price": old_price,
+                "new_price": new_price,
+                "post_save_price": post_save_price,
+                "target_task_id": target_task_id,
+                "original_update_task_id": original_update_task_id,
+                "confirm_task_id": confirm_task_id,
+            }
+        )
         log_step(
             task_id,
             "action_executed",
             "success",
-            (
-                f"intent={intent_code}, execution_mode={execution_mode}, platform={platform}, "
-                f"backend={execution_backend}, client={client_profile}, mapper={response_mapper}, "
-                f"request_adapter={request_adapter}, auth_profile={auth_profile}, "
-                f"provider_profile={provider_profile}, credential_profile={credential_profile}, "
-                f"production_config_ready={production_config_ready}, dry_run_enabled={dry_run_enabled}, "
-                f"selected_backend={selected_backend}, backend_selection_reason={backend_selection_reason}, "
-                f"fallback_enabled={fallback_enabled}, fallback_applied={fallback_applied}, "
-                f"fallback_target={fallback_target}, final_backend={final_backend}, "
-                f"dry_run_failure={dry_run_failure}, recommended_strategy={recommended_strategy}, "
-                f"environment_ready={environment_ready}, live_probe_enabled={live_probe_enabled}, "
-                f"provider_id={provider_id}, capability={capability}, readiness_status={readiness_status}, "
-                f"endpoint_profile={endpoint_profile}, session_injection_mode={session_injection_mode}, "
-                f"evidence_count={evidence_count}, rpa_runner={rpa_runner}, verify_mode={verify_mode}, "
-                f"verify_passed={verify_passed}, verify_reason={verify_reason}, operation_result={operation_result}, "
-                f"failure_layer={failure_layer}, old_price={old_price}, new_price={new_price}, post_save_price={post_save_price}, "
-                f"target_task_id={target_task_id}, original_update_task_id={original_update_task_id}, confirm_task_id={confirm_task_id}"
-            ),
+            detail,
         )
         
         # Refresh task record to get updated values
