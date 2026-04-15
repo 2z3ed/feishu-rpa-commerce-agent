@@ -741,10 +741,13 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         risk_ctx = _load_risk_context_from_steps(db, target_task_id=confirmed_task_id)
         is_adjust_inventory = str(task_record.result_summary or "").startswith("[warehouse.adjust_inventory]")
         if is_adjust_inventory:
-            if not (isinstance(risk_ctx, dict) and risk_ctx.get("capability") == "warehouse.adjust_inventory"):
-                layer = "confirm_context_missing"
+            ok, layer, missing = _validate_adjust_inventory_risk_context(risk_ctx)
+            if not ok:
+                reason = layer
+                if missing:
+                    reason = f"{layer}:missing={','.join(missing)}"
                 return {
-                    "error": f"[{layer}] 目标任务缺少 risk_context，禁止回退到文案解析",
+                    "error": f"[{layer}] 目标任务 risk_context 不可用，禁止回退到文案解析 ({reason})",
                     "error_code": layer,
                     "platform": "odoo",
                     "provider_id": "odoo",
@@ -757,7 +760,7 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                         "failure_layer": layer,
                         "operation_result": "confirm_blocked_noop",
                         "verify_passed": False,
-                        "verify_reason": layer,
+                        "verify_reason": reason,
                         "old_inventory": None,
                         "delta": None,
                         "target_inventory": None,
@@ -773,7 +776,7 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                 state=state,
                 current_task_id=current_task_id,
                 target_task_id=confirmed_task_id,
-                ctx=risk_ctx,
+                ctx=risk_ctx if isinstance(risk_ctx, dict) else {},
                 task_record=task_record,
             )
         
@@ -1051,8 +1054,30 @@ def _load_risk_context_from_steps(db, *, target_task_id: str) -> dict | None:
     try:
         obj = json.loads(text)
     except Exception:
-        return None
-    return obj if isinstance(obj, dict) else None
+        return {"_risk_context_error": "invalid_json", "_raw": text[:500]}
+    if not isinstance(obj, dict):
+        return {"_risk_context_error": "invalid_shape", "_raw": text[:200]}
+    return obj
+
+
+def _validate_adjust_inventory_risk_context(ctx: dict | None) -> tuple[bool, str, list[str]]:
+    """Return (ok, failure_layer, missing_keys)."""
+    if ctx is None:
+        return False, "confirm_context_missing", []
+    if not isinstance(ctx, dict):
+        return False, "confirm_context_missing", []
+    err = str(ctx.get("_risk_context_error") or "").strip()
+    if err == "invalid_json":
+        return False, "confirm_context_invalid_json", []
+    if err == "invalid_shape":
+        return False, "confirm_context_invalid_shape", []
+    required = ("provider_id", "capability", "sku", "delta", "target_inventory")
+    missing = [k for k in required if ctx.get(k) in (None, "", [])]
+    if missing:
+        return False, "confirm_context_incomplete", missing
+    if str(ctx.get("capability") or "") != "warehouse.adjust_inventory":
+        return False, "confirm_context_incomplete", ["capability"]
+    return True, "", []
 
 
 def _build_minimal_internal_sandbox_app():

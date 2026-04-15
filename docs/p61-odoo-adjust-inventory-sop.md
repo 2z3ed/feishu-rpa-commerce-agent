@@ -107,3 +107,31 @@ python3 scripts/p61_odoo_adjust_inventory_sample.py --sku A001 --delta 5 --base-
 - 先看目标任务 `/steps` 是否存在 `step_code=risk_context` 且 `detail` 为 JSON
 - 若缺失，属于预期阻断（confirm 必须失败而非回退解析）
 
+## 7) 负例：risk_context JSON 非法 / 缺关键字段（必须明确失败）
+
+目标：证明 confirm **只接受合法且字段完整** 的结构化上下文。
+
+### 7.1 risk_context JSON 非法（预期）
+- confirm 任务 `status=failed`
+- `/steps action_executed.detail` 至少包含：
+  - `failure_layer=confirm_context_invalid_json`
+  - `operation_result=confirm_blocked_noop`
+  - `verify_passed=False`
+  - `verify_reason=confirm_context_invalid_json`
+  - `capability=warehouse.adjust_inventory`
+
+### 7.2 risk_context 缺关键字段（预期）
+- confirm 任务 `status=failed`
+- `/steps action_executed.detail` 至少包含：
+  - `failure_layer=confirm_context_incomplete`
+  - `verify_reason=confirm_context_incomplete:missing=...`（列出缺的字段，比如 `sku,delta,target_inventory`）
+  - `operation_result=confirm_blocked_noop`
+  - `verify_passed=False`
+  - `capability=warehouse.adjust_inventory`
+
+### 7.3 优先排查
+- 目标任务 `/steps`：
+  - 找 `step_code=risk_context`
+  - 检查 `detail` 是否为 **JSON dict**
+  - 检查是否包含关键字段：`provider_id/capability/sku/delta/target_inventory`
+

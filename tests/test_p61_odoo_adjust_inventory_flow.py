@@ -183,11 +183,150 @@ def test_p61_confirm_fails_when_risk_context_missing(monkeypatch):
         assert pr.get("failure_layer") == "confirm_context_missing"
         assert pr.get("operation_result") == "confirm_blocked_noop"
         assert pr.get("verify_passed") is False
-        assert pr.get("verify_reason") == "confirm_context_missing"
+        assert str(pr.get("verify_reason") or "").startswith("confirm_context_missing")
         # Prove no fallback: missing ctx yields a dedicated failure layer (not Woo parsing errors).
         assert "risk_context" in (out.get("error_message") or "") or "confirm_context_missing" in (
             out.get("error_message") or ""
         )
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p61_confirm_fails_when_risk_context_invalid_json(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        orig_task_id = "TASK-P61-ORIG-BADJSON"
+        confirm_task_id = "TASK-P61-CFM-BADJSON"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        db.add(
+            TaskStep(
+                id="step-badjson",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail="{not a json",
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "failed"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("failure_layer") == "confirm_context_invalid_json"
+        assert pr.get("operation_result") == "confirm_blocked_noop"
+        assert pr.get("verify_passed") is False
+        assert str(pr.get("verify_reason") or "").startswith("confirm_context_invalid_json")
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p61_confirm_fails_when_risk_context_missing_keys(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        orig_task_id = "TASK-P61-ORIG-MISSKEY"
+        confirm_task_id = "TASK-P61-CFM-MISSKEY"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        # Missing sku/delta/target_inventory
+        db.add(
+            TaskStep(
+                id="step-misskey",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail='{"provider_id":"odoo","capability":"warehouse.adjust_inventory"}',
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "failed"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("failure_layer") == "confirm_context_incomplete"
+        assert pr.get("operation_result") == "confirm_blocked_noop"
+        assert pr.get("verify_passed") is False
+        vr = str(pr.get("verify_reason") or "")
+        assert vr.startswith("confirm_context_incomplete:missing=")
+        assert "sku" in vr
+        assert "delta" in vr
+        assert "target_inventory" in vr
         finalize_result(out)
     finally:
         settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
