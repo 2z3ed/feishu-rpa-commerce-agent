@@ -29,6 +29,10 @@ def resolve_intent(state: dict) -> dict:
     # Try to match confirmation command first
     intent_code, slots = try_match_confirmation_command(normalized_text)
     
+    # Try to match warehouse.adjust_inventory (P6.1 Odoo high-risk write sample)
+    if not intent_code:
+        intent_code, slots = try_match_warehouse_adjust_inventory(normalized_text)
+
     # Try to match product.query_sku_status
     if not intent_code:
         intent_code, slots = try_match_warehouse_query_inventory(normalized_text)
@@ -124,6 +128,46 @@ def try_match_warehouse_query_inventory(text: str) -> tuple[str | None, dict]:
     return "warehouse.query_inventory", {"sku": sku_match.group(1), "platform": "odoo"}
 
 
+def try_match_warehouse_adjust_inventory(text: str) -> tuple[str | None, dict]:
+    """Match warehouse.adjust_inventory for minimal Odoo high-risk write entry (P6.1).
+
+    Supported examples (must include 'odoo' + inventory keywords):
+    - 调整 Odoo SKU A001 库存 +5
+    - Odoo 把 A001 库存增加 5
+    - Odoo A001 库存减少 3
+    """
+    if "odoo" not in text.lower():
+        return None, {}
+    if "库存" not in text:
+        return None, {}
+    if not any(k in text for k in ("调整", "增加", "减少", "加", "减")):
+        return None, {}
+
+    sku_match = re.search(r"(?:SKU|商品|产品)?\s*([A-Z][0-9]+)", text, re.IGNORECASE)
+    if not sku_match:
+        return None, {}
+
+    # Parse delta: prefer explicit signed number (+5/-3), fallback to "增加/减少 N"
+    delta = None
+    signed = re.search(r"([+-]\s*\d+)", text)
+    if signed:
+        try:
+            delta = int(signed.group(1).replace(" ", ""))
+        except Exception:
+            delta = None
+    if delta is None:
+        inc = re.search(r"(增加|加)\s*(\d+)", text)
+        dec = re.search(r"(减少|减)\s*(\d+)", text)
+        if inc:
+            delta = int(inc.group(2))
+        elif dec:
+            delta = -int(dec.group(2))
+
+    if delta is None or delta == 0:
+        return None, {}
+
+    return "warehouse.adjust_inventory", {"sku": sku_match.group(1), "delta": delta, "platform": "odoo"}
+
 def try_match_customer_list_recent_conversations(text: str) -> tuple[str | None, dict]:
     """Match customer.list_recent_conversations for minimal Chatwoot readonly entry."""
     if "chatwoot" not in text.lower():
@@ -156,9 +200,10 @@ def try_match_confirmation_command(text: str) -> tuple[str | None, dict]:
     Returns:
         Tuple of (intent_code, slots) or (None, {}) if not matched
     """
-    # Pattern for task confirmation - support full task_id format: TASK-20260409-E4D73C
-    # Format: TASK-YYYYMMDD-XXXXXX (digits and uppercase letters)
-    confirmation_pattern = r'(?:确认执行 | 确认 | 执行)\s*(TASK-\d{8}-[A-Z0-9]+)'
+    # Pattern for task confirmation.
+    # Historically: TASK-YYYYMMDD-XXXXXX. For acceptance scripts we also allow prefixed ids
+    # like TASK-P61-... while still anchoring to "TASK-" prefix.
+    confirmation_pattern = r"(?:确认执行|确认|执行)\s*(TASK-[A-Z0-9][A-Z0-9-]{6,})"
     confirmation_match = re.search(confirmation_pattern, text, re.IGNORECASE)
     
     if confirmation_match:

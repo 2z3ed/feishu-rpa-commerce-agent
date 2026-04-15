@@ -16,6 +16,10 @@ _PLATFORM_PROFILE = {
     "mock": {"name_prefix": "Mock网关商品", "inventory_offset": 0},
 }
 
+# Mutable in-memory override for controlled Odoo inventory write samples (P6.1).
+# Keyed by SKU upper. Values are absolute inventory ints.
+_ODOO_INVENTORY_OVERRIDE: dict[str, int] = {}
+
 _CHATWOOT_CONVERSATIONS = [
     {"conversation_id": 123, "status": "open", "last_message": "您好，请问订单什么时候发货？", "customer_name": "Alice"},
     {"conversation_id": 122, "status": "pending", "last_message": "可以帮我改收货地址吗？", "customer_name": "Bob"},
@@ -45,6 +49,9 @@ def _build_provider_payload(sku_upper: str, platform_key: str):
     profile = _PLATFORM_PROFILE.get(platform_key) or _PLATFORM_PROFILE["sandbox"]
     base_name = f"{profile['name_prefix']} {record['sku']}"
     base_inventory = max(0, record["inventory"] + profile["inventory_offset"])
+    if platform_key == "odoo":
+        if sku_upper in _ODOO_INVENTORY_OVERRIDE:
+            base_inventory = max(0, int(_ODOO_INVENTORY_OVERRIDE[sku_upper]))
 
     if platform_key == "woo":
         return {
@@ -116,6 +123,45 @@ def provider_woo_query_products(
 def provider_odoo_query_sku(sku: str, company: str = Query(default="main")):
     return _build_provider_payload(sku.upper(), "odoo")
 
+
+@router.post("/provider/odoo/inventory/adjust", include_in_schema=False)
+def provider_odoo_adjust_inventory(
+    sku: str = Query(...),
+    delta: int = Query(...),
+):
+    """Controlled, non-production inventory adjustment for P6.1 acceptance only.
+
+    This endpoint mutates in-memory override used by provider_odoo_query_sku.
+    """
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+    sku_upper = (sku or "").upper()
+    if not sku_upper:
+        raise HTTPException(status_code=400, detail="sku is required")
+    if sku_upper not in _BASE_SKU_DATA:
+        raise HTTPException(status_code=404, detail=f"SKU {sku_upper} not found")
+    try:
+        d = int(delta)
+    except Exception:
+        raise HTTPException(status_code=400, detail="delta must be int")
+    if d == 0:
+        raise HTTPException(status_code=400, detail="delta must be non-zero")
+
+    # Derive current inventory from base + offset + existing override.
+    current_payload = _build_provider_payload(sku_upper, "odoo")
+    current_qty = int(((current_payload or {}).get("payload") or {}).get("qty_available") or 0)
+    new_qty = max(0, int(current_qty + d))
+    _ODOO_INVENTORY_OVERRIDE[sku_upper] = new_qty
+    return {
+        "provider": "odoo",
+        "payload": {
+            "default_code": sku_upper,
+            "qty_before": current_qty,
+            "delta": d,
+            "qty_after": new_qty,
+            "updated": True,
+        },
+    }
 
 @router.get("/provider/chatwoot/conversations/recent", include_in_schema=False)
 def provider_chatwoot_recent_conversations(limit: int = Query(default=5, ge=1, le=20)):

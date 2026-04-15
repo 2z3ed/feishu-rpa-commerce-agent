@@ -113,8 +113,8 @@ def check_platform_provider_readiness(provider: str, *, capability: str) -> Prov
         if profile.provider_name == "chatwoot":
             credential_profile = "chatwoot_credential_profile"
             credential_ready = True
-        elif profile.provider_name == "odoo" and capability == "warehouse.query_inventory":
-            # P5.0: inventory readonly via sandbox skeleton; keep credential optional in this path.
+        elif profile.provider_name == "odoo" and capability in {"warehouse.query_inventory", "warehouse.adjust_inventory"}:
+            # P6.x: Odoo inventory sample chain via sandbox skeleton; keep credential optional in this path.
             credential_profile = "odoo_credential_profile"
             credential_ready = True
         else:

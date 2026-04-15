@@ -228,6 +228,10 @@ def resolve_execution_mode(intent_code: str, requested_mode: str | None = None) 
     # Keep the global strategy unchanged; only tighten the semantic for this readonly chain.
     if intent_code == "warehouse.query_inventory":
         return EXECUTION_MODE_API
+    # P6.1: Odoo high-risk write sample chain also uses internal sandbox route (api-like),
+    # but must still require confirmation before any write happens.
+    if intent_code == "warehouse.adjust_inventory":
+        return EXECUTION_MODE_API
     if intent_code == "product.query_sku_status":
         allow_rpa = bool(getattr(settings, "PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY", False))
         if mode in {EXECUTION_MODE_MOCK, EXECUTION_MODE_API}:

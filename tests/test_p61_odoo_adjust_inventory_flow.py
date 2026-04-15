@@ -1,0 +1,134 @@
+import types
+import sys
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db.base import Base
+from app.db.models import TaskRecord
+from app.graph.nodes.execute_action import execute_action
+from app.graph.nodes.finalize_result import finalize_result
+from app.core.config import settings
+
+
+def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkeypatch):
+    # Keep this test self-contained when optional deps are unavailable.
+    fake_lark = types.ModuleType("lark_oapi")
+
+    class _Client:
+        pass
+
+    fake_lark.Client = _Client
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark)
+    fake_celery = types.ModuleType("celery")
+
+    class _Celery:
+        def __init__(self, *args, **kwargs):
+            self.conf = {}
+
+        def config_from_object(self, *args, **kwargs):
+            return None
+
+        def task(self, *args, **kwargs):
+            def _decorator(fn):
+                class _TaskWrapper:
+                    def __init__(self, f):
+                        self.run = f
+
+                return _TaskWrapper(fn)
+
+            return _decorator
+
+    fake_celery.Celery = _Celery
+    monkeypatch.setitem(sys.modules, "celery", fake_celery)
+
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        # Ensure internal sandbox is enabled for controlled write.
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        # Patch SessionLocal in all involved modules to use the same in-memory DB.
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        orig_task_id = "TASK-P61-ORIG-1"
+        confirm_task_id_1 = "TASK-P61-CFM-1"
+        confirm_task_id_2 = "TASK-P61-CFM-2"
+
+        db.add(TaskRecord(task_id=orig_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.add(TaskRecord(task_id=confirm_task_id_1, source_platform="feishu", status="queued", intent_text=""))
+        db.add(TaskRecord(task_id=confirm_task_id_2, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        # Original high-risk action must not execute directly.
+        st_orig = {
+            "task_id": orig_task_id,
+            "intent_code": "warehouse.adjust_inventory",
+            "slots": {"sku": "A001", "delta": 5, "platform": "odoo"},
+            "status": "processing",
+        }
+        out_orig = execute_action(st_orig)
+        assert out_orig["status"] == "awaiting_confirmation"
+        assert out_orig["execution_mode"] == "api"
+        assert "请回复：确认执行" in (out_orig.get("result_summary") or "")
+        finalize_result(out_orig)
+
+        rec = db.query(TaskRecord).filter(TaskRecord.task_id == orig_task_id).first()
+        assert rec is not None
+        assert rec.status == "awaiting_confirmation"
+
+        # Confirm should execute controlled write and post-check.
+        st_c1 = {
+            "task_id": confirm_task_id_1,
+            "intent_code": "system.confirm_task",
+            "slots": {"task_id": orig_task_id},
+            "raw_text": f"确认执行 {orig_task_id}",
+            "status": "processing",
+        }
+        out_c1 = execute_action(st_c1)
+        assert out_c1["status"] in {"succeeded", "failed"}
+        pr = out_c1.get("parsed_result") or {}
+        assert pr.get("target_task_id") == orig_task_id
+        assert pr.get("confirm_task_id") == confirm_task_id_1
+        assert pr.get("operation_result") in {
+            "write_adjust_inventory",
+            "write_adjust_inventory_verify_failed",
+            "write_adjust_inventory_failed",
+        }
+        assert "verify_passed" in pr
+        assert "verify_reason" in pr
+        finalize_result(out_c1)
+
+        rec2 = db.query(TaskRecord).filter(TaskRecord.task_id == orig_task_id).first()
+        assert rec2 is not None
+        assert rec2.status in {"succeeded", "failed"}
+
+        # Second confirm on same original must be blocked (唯一放行 + 幂等).
+        st_c2 = {
+            "task_id": confirm_task_id_2,
+            "intent_code": "system.confirm_task",
+            "slots": {"task_id": orig_task_id},
+            "raw_text": f"确认执行 {orig_task_id}",
+            "status": "processing",
+        }
+        out_c2 = execute_action(st_c2)
+        assert out_c2["status"] == "failed"
+        pr2 = out_c2.get("parsed_result") or {}
+        assert pr2.get("failure_layer") == "confirm_target_already_consumed"
+        assert pr2.get("operation_result") == "confirm_blocked_noop"
+        finalize_result(out_c2)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+

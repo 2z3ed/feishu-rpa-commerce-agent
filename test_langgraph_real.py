@@ -1,6 +1,13 @@
 """
 Test LangGraph with real database
 """
+import os
+
+import pytest
+
+if os.getenv("RUN_REAL_INTEGRATION_TESTS", "").strip().lower() not in {"1", "true", "yes"}:
+    pytest.skip("real integration test requires Postgres + SDK; set RUN_REAL_INTEGRATION_TESTS=1 to run", allow_module_level=True)
+
 from app.graph.builder import graph as lang_graph
 from app.db.session import SessionLocal
 from app.db.models import TaskRecord

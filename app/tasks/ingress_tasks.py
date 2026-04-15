@@ -148,6 +148,11 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         old_price = pr.get("old_price", None)
         new_price = pr.get("new_price", None)
         post_save_price = pr.get("post_save_price", None)
+        # P6.1: Odoo adjust_inventory audit fields (optional, only present on that flow)
+        old_inventory = pr.get("old_inventory", None)
+        delta = pr.get("delta", None)
+        target_inventory = pr.get("target_inventory", None)
+        post_inventory = pr.get("post_inventory", None)
         target_task_id = pr.get("target_task_id", "")
         original_update_task_id = pr.get("original_update_task_id", "")
         confirm_task_id = pr.get("confirm_task_id", "")
@@ -191,6 +196,10 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "old_price": old_price,
                 "new_price": new_price,
                 "post_save_price": post_save_price,
+                "old_inventory": old_inventory,
+                "delta": delta,
+                "target_inventory": target_inventory,
+                "post_inventory": post_inventory,
                 "target_task_id": target_task_id,
                 "original_update_task_id": original_update_task_id,
                 "confirm_task_id": confirm_task_id,

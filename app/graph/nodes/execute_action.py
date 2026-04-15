@@ -3,6 +3,7 @@ Execute Action Node
 
 Executes the identified action based on intent.
 """
+import json
 import re
 from app.core.logging import logger
 from app.db.session import SessionLocal
@@ -230,6 +231,38 @@ def execute_action(state: dict) -> dict:
             state["backend_selection_reason"] = "provider_capability_route"
             state["client_profile"] = "sandbox_http@odoo_inventory"
 
+        elif intent_code == "warehouse.adjust_inventory":
+            result = execute_odoo_adjust_inventory_prepare(task_id=task_id, slots=slots)
+            state["status"] = "awaiting_confirmation"
+            state["result_summary"] = format_warehouse_adjust_inventory_confirmation(result)
+            state["platform"] = result["platform"]
+            state["provider_id"] = result["provider_id"]
+            state["capability"] = result["capability"]
+            state["readiness_status"] = result["readiness_status"]
+            state["endpoint_profile"] = result["endpoint_profile"]
+            state["session_injection_mode"] = result["session_injection_mode"]
+            state["provider_profile"] = result["provider_profile"]
+            state["auth_profile"] = result["auth_profile"]
+            state["request_adapter"] = result["request_adapter"]
+            state["response_mapper"] = result["response_mapper"]
+            state["credential_profile"] = result["credential_profile"]
+            state["execution_backend"] = "internal_sandbox"
+            state["selected_backend"] = "internal_sandbox"
+            state["final_backend"] = "internal_sandbox"
+            state["backend_selection_reason"] = "provider_capability_route|high_risk_requires_confirm"
+            state["client_profile"] = "sandbox_http@odoo_inventory_adjust"
+            # Structured audit fields (avoid parsing summary on confirm).
+            pr = {
+                "operation_result": "risk_adjust_inventory_pending",
+                "old_inventory": result.get("old_inventory"),
+                "delta": result.get("delta"),
+                "target_inventory": result.get("target_inventory"),
+                "target_task_id": task_id,
+                "original_update_task_id": task_id,
+                "confirm_task_id": "",
+            }
+            state["parsed_result"] = pr
+
         elif intent_code == "customer.list_recent_conversations":
             result = execute_chatwoot_list_recent_conversations(slots)
             state["status"] = "succeeded"
@@ -261,6 +294,23 @@ def execute_action(state: dict) -> dict:
                     state["parsed_result"] = pr
                 state["result_summary"] = format_task_confirmation_result(result)
                 state["status"] = "succeeded"
+                # P6.1: If confirm executed a controlled provider write, reflect it in observable fields
+                # so /steps action_executed.detail can be used as evidence.
+                if result.get("provider_id"):
+                    state["provider_id"] = result.get("provider_id")
+                if result.get("capability"):
+                    state["capability"] = result.get("capability")
+                if result.get("platform"):
+                    state["platform"] = result.get("platform")
+                # Default Odoo confirm observable fields (safe no-op for Woo path).
+                if state.get("capability") == "warehouse.adjust_inventory":
+                    state["readiness_status"] = "ready"
+                    state["endpoint_profile"] = "odoo_product_stock_v1"
+                    state["session_injection_mode"] = "header"
+                    state["execution_backend"] = "internal_sandbox"
+                    state["selected_backend"] = "internal_sandbox"
+                    state["final_backend"] = "internal_sandbox"
+                    state["backend_selection_reason"] = "confirm_controlled_write"
                 if rpa_meta:
                     state["execution_mode"] = rpa_meta.get("execution_mode", "rpa")
                     state["execution_backend"] = rpa_meta.get("execution_backend", "rpa_local_fake")
@@ -274,8 +324,9 @@ def execute_action(state: dict) -> dict:
                     if rpa_meta.get("execution_mode") == "api_then_rpa_verify":
                         state["backend_selection_reason"] = "api_then_rpa_verify_ok"
                 else:
-                    state["execution_backend"] = "mock_repo"
-                    state["client_profile"] = "mock_repo"
+                    # Keep legacy confirm defaults, but do not overwrite controlled write fields.
+                    state.setdefault("execution_backend", "mock_repo")
+                    state.setdefault("client_profile", "mock_repo")
                 if "verify_passed" in result:
                     state["verify_passed"] = result.get("verify_passed")
                     state["verify_reason"] = str(result.get("verify_reason", ""))
@@ -670,6 +721,12 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
                     verify_reason=reason,
                 ),
             }
+
+        # P6.1: For Odoo adjust_inventory, confirm must read structured risk context from TaskSteps,
+        # never parse natural language summary.
+        risk_ctx = _load_risk_context_from_steps(db, target_task_id=confirmed_task_id)
+        if isinstance(risk_ctx, dict) and risk_ctx.get("capability") == "warehouse.adjust_inventory":
+            return _confirm_execute_odoo_adjust_inventory(db, state=state, current_task_id=current_task_id, target_task_id=confirmed_task_id, ctx=risk_ctx, task_record=task_record)
         
         # Parse the original intent from task record
         # The intent_text should contain the original price update command
@@ -924,6 +981,178 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         db.close()
 
 
+def _load_risk_context_from_steps(db, *, target_task_id: str) -> dict | None:
+    try:
+        from app.db.models import TaskStep
+    except Exception:
+        return None
+    rows = (
+        db.query(TaskStep.detail)
+        .filter(TaskStep.task_id == target_task_id, TaskStep.step_code == "risk_context")
+        .order_by(TaskStep.created_at.desc())
+        .limit(1)
+        .all()
+    )
+    if not rows:
+        return None
+    raw = rows[0][0] if isinstance(rows[0], tuple) else getattr(rows[0], "detail", "")
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _build_minimal_internal_sandbox_app():
+    from fastapi import FastAPI
+    from app.api.v1 import internal_sandbox
+
+    a = FastAPI()
+    a.include_router(internal_sandbox.router, prefix="/api/v1")
+    return a
+
+
+def _confirm_execute_odoo_adjust_inventory(
+    db,
+    *,
+    state: dict,
+    current_task_id: str,
+    target_task_id: str,
+    ctx: dict,
+    task_record: TaskRecord,
+) -> dict:
+    from fastapi.testclient import TestClient
+
+    sku = str(ctx.get("sku") or "").strip().upper()
+    delta = int(ctx.get("delta") or 0)
+    old_inv = int(ctx.get("old_inventory") or 0)
+    target_inv = int(ctx.get("target_inventory") or (old_inv + delta))
+    provider_id = str(ctx.get("provider_id") or "odoo")
+
+    if not sku or delta == 0:
+        layer = "confirm_context_invalid"
+        return {
+            "error": f"[{layer}] 风险上下文缺失 sku/delta",
+            "error_code": layer,
+            "target_task_id": target_task_id,
+            "original_update_task_id": target_task_id,
+            "confirm_task_id": current_task_id or None,
+            "parsed_result": {
+                "failure_layer": layer,
+                "operation_result": "confirm_blocked_noop",
+                "verify_passed": False,
+                "verify_reason": layer,
+                "old_inventory": old_inv,
+                "delta": delta,
+                "target_inventory": target_inv,
+                "post_inventory": None,
+                "target_task_id": target_task_id,
+                "original_update_task_id": target_task_id,
+                "confirm_task_id": current_task_id or None,
+            },
+        }
+
+    log_step(
+        current_task_id,
+        "controlled_write_started",
+        "processing",
+        f"provider_id={provider_id} capability=warehouse.adjust_inventory target_task_id={target_task_id} sku={sku} delta={delta}",
+    )
+
+    with TestClient(_build_minimal_internal_sandbox_app()) as client:
+        resp = client.post(
+            "/api/v1/internal/sandbox/provider/odoo/inventory/adjust",
+            params={"sku": sku, "delta": delta},
+        )
+        if resp.status_code != 200:
+            layer = "provider_upstream_unavailable"
+            msg = f"sandbox_adjust_failed status={resp.status_code} body={(resp.text or '')[:200]}"
+            log_step(current_task_id, "controlled_write_failed", "failed", msg[:900])
+            return {
+                "error": f"[{layer}] {msg}",
+                "error_code": layer,
+                "target_task_id": target_task_id,
+                "original_update_task_id": target_task_id,
+                "confirm_task_id": current_task_id or None,
+                "parsed_result": {
+                    "failure_layer": layer,
+                    "operation_result": "write_adjust_inventory_failed",
+                    "verify_passed": False,
+                    "verify_reason": msg,
+                    "old_inventory": old_inv,
+                    "delta": delta,
+                    "target_inventory": target_inv,
+                    "post_inventory": None,
+                    "target_task_id": target_task_id,
+                    "original_update_task_id": target_task_id,
+                    "confirm_task_id": current_task_id or None,
+                },
+            }
+
+    # Post-check via existing readonly client path (internal sandbox).
+    post = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
+    post_inv = int(post.get("inventory") or 0)
+    verify_passed = bool(post_inv == target_inv)
+    verify_reason = "ok" if verify_passed else f"post_inventory_mismatch expected={target_inv} got={post_inv}"
+    operation_result = "write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"
+
+    # Update original target task record as single source of truth for business action outcome.
+    # Use an explicit UPDATE to avoid session identity-map surprises in shared-session tests.
+    now_ts = get_shanghai_now()
+    db.query(TaskRecord).filter(TaskRecord.task_id == target_task_id).update(
+        {
+            "status": "succeeded" if verify_passed else "failed",
+            "error_message": "" if verify_passed else f"[verify_failed] {verify_reason}",
+            "finished_at": now_ts,
+            "updated_at": now_ts,
+        }
+    )
+    db.commit()
+
+    log_step(
+        current_task_id,
+        "controlled_write_succeeded",
+        "success" if verify_passed else "failed",
+        f"verify_passed={verify_passed} verify_reason={verify_reason} post_inventory={post_inv}",
+    )
+
+    result = {
+        "status": "success" if verify_passed else "failed",
+        "platform": "odoo",
+        "provider_id": provider_id,
+        "capability": "warehouse.adjust_inventory",
+        "sku": sku,
+        "old_inventory": old_inv,
+        "delta": delta,
+        "target_inventory": target_inv,
+        "post_inventory": post_inv,
+        "verify_passed": verify_passed,
+        "verify_reason": verify_reason,
+        "operation_result": operation_result,
+        "failure_layer": "" if verify_passed else "verify_failed",
+        "target_task_id": target_task_id,
+        "original_update_task_id": target_task_id,
+        "confirm_task_id": current_task_id or None,
+    }
+    result["parsed_result"] = {
+        "failure_layer": result["failure_layer"],
+        "operation_result": operation_result,
+        "verify_passed": verify_passed,
+        "verify_reason": verify_reason,
+        "old_inventory": old_inv,
+        "delta": delta,
+        "target_inventory": target_inv,
+        "post_inventory": post_inv,
+        "target_task_id": target_task_id,
+        "original_update_task_id": target_task_id,
+        "confirm_task_id": current_task_id or None,
+    }
+    return result
+
+
 def execute_product_update_price(executor, state: dict, slots: dict) -> dict:
     """
     Execute product.update_price action with confirmation flow.
@@ -1023,14 +1252,26 @@ def format_task_confirmation_result(result: dict) -> str:
     Returns:
         Formatted result text message
     """
-    lines = [
-        "✅ 确认执行成功",
-        f"SKU: {result.get('sku')}",
-        f"原价：{result.get('old_price')}",
-        f"新价格：{result.get('new_price')}",
-        f"执行结果：{result.get('status')}",
-        f"平台：{result.get('platform')}",
-    ]
+    # P6.1: Odoo adjust_inventory confirmation result
+    if result.get("capability") == "warehouse.adjust_inventory" or "old_inventory" in result:
+        lines = [
+            "✅ 确认执行成功",
+            f"SKU: {result.get('sku')}",
+            f"写前库存：{result.get('old_inventory')}",
+            f"调整量(delta)：{result.get('delta')}",
+            f"目标库存：{result.get('target_inventory')}",
+            f"写后库存：{result.get('post_inventory')}",
+            f"平台：{result.get('platform', 'odoo')}",
+        ]
+    else:
+        lines = [
+            "✅ 确认执行成功",
+            f"SKU: {result.get('sku')}",
+            f"原价：{result.get('old_price')}",
+            f"新价格：{result.get('new_price')}",
+            f"执行结果：{result.get('status')}",
+            f"平台：{result.get('platform')}",
+        ]
     if "verify_passed" in result:
         vp = result.get("verify_passed")
         vr = result.get("verify_reason", "")
@@ -1038,3 +1279,62 @@ def format_task_confirmation_result(result: dict) -> str:
         if result.get("api_price_after_update") is not None:
             lines.append(f"API 回读价：{result.get('api_price_after_update')}")
     return "\n".join(lines)
+
+
+def execute_odoo_adjust_inventory_prepare(*, task_id: str, slots: dict) -> dict:
+    sku = str(slots.get("sku") or "").strip().upper()
+    if not sku:
+        raise ValueError("SKU is required")
+    delta = int(slots.get("delta") or 0)
+    if delta == 0:
+        raise ValueError("delta is required")
+
+    # Read-before-write (readonly chain) to capture old value and compute target.
+    before = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
+    old_inv = int(before.get("inventory") or 0)
+    target_inv = max(0, int(old_inv + delta))
+
+    ctx = {
+        "provider_id": "odoo",
+        "capability": "warehouse.adjust_inventory",
+        "sku": sku,
+        "old_inventory": old_inv,
+        "delta": delta,
+        "target_inventory": target_inv,
+        "target_task_id": task_id,
+        "original_update_task_id": task_id,
+    }
+    # Persist structured confirm context as a TaskStep (single source for confirm; do not parse summary).
+    log_step(task_id, "risk_context", "success", json.dumps(ctx, ensure_ascii=False, sort_keys=True))
+
+    # Return shape for result_summary template and observable fields.
+    return {
+        "platform": "odoo",
+        "provider_id": "odoo",
+        "capability": "warehouse.adjust_inventory",
+        "readiness_status": before.get("readiness_status", "ready"),
+        "endpoint_profile": before.get("endpoint_profile", "odoo_product_stock_v1"),
+        "session_injection_mode": before.get("session_injection_mode", "header"),
+        "provider_profile": before.get("provider_profile", "odoo"),
+        "auth_profile": before.get("auth_profile", "odoo_auth_profile"),
+        "request_adapter": before.get("request_adapter", "odoo_request_adapter"),
+        "response_mapper": before.get("response_mapper", "odoo_mapper"),
+        "credential_profile": before.get("credential_profile", "odoo_credential_profile"),
+        "sku": sku,
+        "old_inventory": old_inv,
+        "delta": delta,
+        "target_inventory": target_inv,
+        "task_id": task_id,
+    }
+
+
+def format_warehouse_adjust_inventory_confirmation(result: dict) -> str:
+    return (
+        f"⚠️ 检测到高风险操作：调整库存（Odoo）\n"
+        f"SKU: {result.get('sku')}\n"
+        f"写前库存：{result.get('old_inventory')}\n"
+        f"调整量(delta)：{result.get('delta')}\n"
+        f"目标库存：{result.get('target_inventory')}\n"
+        f"任务号：{result.get('task_id')}\n"
+        f"请回复：确认执行 {result.get('task_id')}"
+    )
