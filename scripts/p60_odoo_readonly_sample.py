@@ -148,6 +148,7 @@ def main() -> int:
                 must = {
                     "provider_id=odoo",
                     "capability=warehouse.query_inventory",
+                    "execution_mode=api",
                     "readiness_status=ready",
                     "endpoint_profile=",
                     "session_injection_mode=",

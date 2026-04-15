@@ -64,6 +64,7 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/${TASK_ID}/steps"
 - `result_summary` 前缀包含 `[warehouse.query_inventory]`
 - `result_summary` 关键字段稳定可读，至少包含：
   - `SKU: <sku>`
+  - `商品：<string>`
   - `库存：<int>`
   - `平台：odoo`
   - `provider_id：odoo`
@@ -73,6 +74,7 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/${TASK_ID}/steps"
 
 - 存在 `step_code=action_executed`
 - `detail` 至少包含并稳定：
+  - `execution_mode=api`
   - `provider_id=odoo`
   - `capability=warehouse.query_inventory`
   - `readiness_status=ready`
@@ -94,5 +96,6 @@ curl -s "http://127.0.0.1:8000/api/v1/tasks/${TASK_ID}/steps"
 3. **证据缺失**：
    - `/api/v1/tasks/{task_id}` 看 `status/result_summary/error_message`
    - `/api/v1/tasks/{task_id}/steps` 看 `action_executed.detail` 是否字段缺失/为空
+   - 重点看 `execution_mode` 是否为 `api`（避免被旧 `mock` 口径误导）
 4. **internal sandbox 关闭**：确认 `ENABLE_INTERNAL_SANDBOX_API=true`
 

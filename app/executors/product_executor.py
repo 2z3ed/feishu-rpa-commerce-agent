@@ -223,6 +223,11 @@ def resolve_execution_mode(intent_code: str, requested_mode: str | None = None) 
     - update_price and confirm remain mock only
     """
     mode = (requested_mode or "").lower().strip()
+    # P6.0: Odoo readonly sample chain (warehouse.query_inventory) should not be labelled "mock".
+    # This path uses provider profile + request_adapter + internal sandbox route + mapper, i.e. api-like.
+    # Keep the global strategy unchanged; only tighten the semantic for this readonly chain.
+    if intent_code == "warehouse.query_inventory":
+        return EXECUTION_MODE_API
     if intent_code == "product.query_sku_status":
         allow_rpa = bool(getattr(settings, "PRODUCT_QUERY_SKU_ENABLE_REAL_ADMIN_READONLY", False))
         if mode in {EXECUTION_MODE_MOCK, EXECUTION_MODE_API}:
