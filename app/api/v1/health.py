@@ -1,4 +1,3 @@
-import redis
 from fastapi import APIRouter
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +12,10 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 def check_redis() -> tuple[bool, str]:
     try:
+        try:
+            import redis  # type: ignore
+        except Exception as e:  # pragma: no cover
+            return False, f"redis client not installed: {e}"
         r = redis.Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,

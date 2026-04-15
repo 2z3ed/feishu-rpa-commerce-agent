@@ -12,6 +12,14 @@ from app.executors import get_product_executor, resolve_execution_mode, resolve_
 from app.clients.woo_readonly_prep import get_woo_rollout_policy
 from app.clients.product_provider_profile import resolve_provider_profile
 from app.clients.product_provider_readiness import check_platform_provider_readiness
+from app.clients.odoo_inventory_client import (
+    OdooInventoryClient,
+    OdooInventoryClientDisabled,
+    OdooInventoryClientError,
+    OdooInventoryClientNotFound,
+    OdooInventoryClientRequestError,
+    OdooInventoryClientTimeout,
+)
 from app.core.config import settings
 from app.rpa.confirm_update_price import (
     run_confirm_update_price_api_then_rpa_verify,
@@ -478,11 +486,30 @@ def execute_odoo_query_inventory(slots: dict) -> dict:
     if not readiness.ready:
         raise ValueError(f"[provider_readiness_failed] {readiness.reason}")
     profile = resolve_provider_profile(provider)
-    inventory = 120 if sku == "A001" else 0
+    # P6.0: make Odoo readonly use the same observable provider chain
+    # (provider profile + request adapter + internal sandbox route + mapper)
+    client = OdooInventoryClient(
+        base_url=settings.PRODUCT_QUERY_SKU_API_BASE_URL or "internal://sandbox",
+        timeout_seconds=max(int(settings.PRODUCT_QUERY_SKU_API_TIMEOUT_MS), 1) / 1000.0,
+    )
+    try:
+        inv = client.query_inventory(sku)
+    except OdooInventoryClientNotFound:
+        inv = None
+    except (OdooInventoryClientDisabled, OdooInventoryClientTimeout) as exc:
+        raise ValueError(f"[provider_upstream_unavailable] {exc}") from exc
+    except OdooInventoryClientRequestError as exc:
+        raise ValueError(f"[provider_request_invalid] {exc}") from exc
+    except OdooInventoryClientError as exc:
+        raise ValueError(f"[provider_client_error] {exc}") from exc
+
+    inventory = int(inv.inventory) if inv else 0
+    status = str(inv.status) if inv else "not_found"
     return {
         "sku": sku,
         "inventory": inventory,
-        "status": "active" if inventory > 0 else "inactive",
+        "status": status,
+        "product_name": (inv.product_name if inv else "未找到"),
         "platform": provider,
         "provider_id": provider,
         "capability": capability,
@@ -491,8 +518,8 @@ def execute_odoo_query_inventory(slots: dict) -> dict:
         "session_injection_mode": profile.session_injection_mode,
         "provider_profile": profile.provider_name,
         "auth_profile": profile.auth_profile_name,
-        "request_adapter": profile.request_adapter_name,
-        "response_mapper": profile.response_mapper_name,
+        "request_adapter": client.last_request_adapter if "client" in locals() else profile.request_adapter_name,
+        "response_mapper": client.last_mapper if "client" in locals() else profile.response_mapper_name,
         "credential_profile": readiness.credential_profile,
     }
 
@@ -500,6 +527,7 @@ def execute_odoo_query_inventory(slots: dict) -> dict:
 def format_warehouse_query_inventory_result(result: dict) -> str:
     return (
         f"SKU: {result.get('sku')}\n"
+        f"商品：{result.get('product_name', 'N/A')}\n"
         f"库存：{result.get('inventory')}\n"
         f"状态：{result.get('status')}\n"
         f"平台：{result.get('platform')}\n"

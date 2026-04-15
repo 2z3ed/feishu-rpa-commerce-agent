@@ -1,4 +1,9 @@
-import lark_oapi as lark
+from __future__ import annotations
+
+try:
+    import lark_oapi as lark  # type: ignore
+except Exception:  # pragma: no cover
+    lark = None  # type: ignore[assignment]
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -14,7 +19,9 @@ class FeishuClient:
         return cls._instance
 
     @property
-    def client(self) -> lark.Client:
+    def client(self):
+        if lark is None:
+            raise RuntimeError("lark_oapi is not installed")
         if self._client is None:
             # 使用 builder 模式初始化客户端
             self._client = lark.Client().builder()\
@@ -26,6 +33,8 @@ class FeishuClient:
 
     def send_text_message(self, receive_id: str, text: str) -> bool:
         try:
+            if lark is None:
+                raise RuntimeError("lark_oapi is not installed")
             from lark_oapi.api.im.v1.model import CreateMessageRequest, CreateMessageRequestBody
             
             request = (
@@ -54,6 +63,8 @@ class FeishuClient:
     def send_text_reply(self, message_id: str, text: str) -> bool:
         try:
             logger.info("=== FEISHU REPLY START ===")
+            if lark is None:
+                raise RuntimeError("lark_oapi is not installed")
             from lark_oapi.api.im.v1.model import ReplyMessageRequest, ReplyMessageRequestBody
             
             request = (
