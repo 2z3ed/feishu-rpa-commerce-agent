@@ -101,6 +101,7 @@ def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkey
         pr = out_c1.get("parsed_result") or {}
         assert pr.get("target_task_id") == orig_task_id
         assert pr.get("confirm_task_id") == confirm_task_id_1
+        assert pr.get("confirm_backend") == "internal_sandbox"
         assert pr.get("operation_result") in {
             "write_adjust_inventory",
             "write_adjust_inventory_verify_failed",
@@ -132,3 +133,62 @@ def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkey
         settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
         db.close()
 
+
+def test_p61_confirm_fails_when_risk_context_missing(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        orig_task_id = "TASK-P61-ORIG-NOCTX"
+        confirm_task_id = "TASK-P61-CFM-NOCTX"
+
+        # Create an awaiting_confirmation target task that looks like adjust_inventory,
+        # but intentionally has no risk_context TaskStep.
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        st_c = {
+            "task_id": confirm_task_id,
+            "intent_code": "system.confirm_task",
+            "slots": {"task_id": orig_task_id},
+            "raw_text": f"确认执行 {orig_task_id}",
+            "status": "processing",
+        }
+        out = execute_action(st_c)
+        assert out["status"] == "failed"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("failure_layer") == "confirm_context_missing"
+        assert pr.get("operation_result") == "confirm_blocked_noop"
+        assert pr.get("verify_passed") is False
+        assert pr.get("verify_reason") == "confirm_context_missing"
+        # Prove no fallback: missing ctx yields a dedicated failure layer (not Woo parsing errors).
+        assert "risk_context" in (out.get("error_message") or "") or "confirm_context_missing" in (
+            out.get("error_message") or ""
+        )
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()

@@ -144,6 +144,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         verify_passed = result.get("verify_passed", pr.get("verify_passed", None))
         verify_reason = result.get("verify_reason", pr.get("verify_reason", ""))
         operation_result = result.get("operation_result", pr.get("operation_result", ""))
+        confirm_backend = result.get("confirm_backend", pr.get("confirm_backend", ""))
         failure_layer = pr.get("failure_layer", "")
         old_price = pr.get("old_price", None)
         new_price = pr.get("new_price", None)
@@ -192,6 +193,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "verify_passed": verify_passed,
                 "verify_reason": verify_reason,
                 "operation_result": operation_result,
+                "confirm_backend": confirm_backend,
                 "failure_layer": failure_layer,
                 "old_price": old_price,
                 "new_price": new_price,

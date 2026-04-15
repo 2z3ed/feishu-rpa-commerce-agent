@@ -75,6 +75,7 @@ python3 scripts/p61_odoo_adjust_inventory_sample.py --sku A001 --delta 5 --base-
 - `detail` 至少包含并可读：
   - `provider_id=odoo`
   - `capability=warehouse.adjust_inventory`
+  - `confirm_backend=internal_sandbox`（表示 confirm 放行后的受控写链）
   - `operation_result=...`
   - `verify_passed=true|false`
   - `verify_reason=...`
@@ -87,4 +88,22 @@ python3 scripts/p61_odoo_adjust_inventory_sample.py --sku A001 --delta 5 --base-
 2. **原始任务不进入 awaiting_confirmation**：看 `/api/v1/tasks/{orig_task_id}` 的 `status/result_summary`
 3. **confirm 未执行写链**：看 `/api/v1/tasks/{confirm_task_id}/steps` 的 `action_executed.detail` 是否包含 `operation_result/verify_*`
 4. **核验失败**：看 `verify_passed/verify_reason/post_inventory` 等字段
+
+## 6) 负例：目标任务缺少 risk_context（必须明确失败）
+
+目标：证明 confirm **不会**回退到“解析 summary 文案”。
+
+### 6.1 现象（预期）
+- confirm 任务 `status=failed`
+- `/api/v1/tasks/{confirm_task_id}/steps` 的 `action_executed.detail` 至少包含：
+  - `failure_layer=confirm_context_missing`
+  - `operation_result=confirm_blocked_noop`
+  - `verify_passed=False`
+  - `verify_reason=confirm_context_missing`
+  - `capability=warehouse.adjust_inventory`
+  - `target_task_id=<orig_task_id>`
+
+### 6.2 优先排查
+- 先看目标任务 `/steps` 是否存在 `step_code=risk_context` 且 `detail` 为 JSON
+- 若缺失，属于预期阻断（confirm 必须失败而非回退解析）
 

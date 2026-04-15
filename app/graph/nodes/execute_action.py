@@ -251,6 +251,7 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "internal_sandbox"
             state["backend_selection_reason"] = "provider_capability_route|high_risk_requires_confirm"
             state["client_profile"] = "sandbox_http@odoo_inventory_adjust"
+            state["confirm_backend"] = "none"
             # Structured audit fields (avoid parsing summary on confirm).
             pr = {
                 "operation_result": "risk_adjust_inventory_pending",
@@ -260,6 +261,7 @@ def execute_action(state: dict) -> dict:
                 "target_task_id": task_id,
                 "original_update_task_id": task_id,
                 "confirm_task_id": "",
+                "confirm_backend": "none",
             }
             state["parsed_result"] = pr
 
@@ -302,6 +304,8 @@ def execute_action(state: dict) -> dict:
                     state["capability"] = result.get("capability")
                 if result.get("platform"):
                     state["platform"] = result.get("platform")
+                if result.get("confirm_backend"):
+                    state["confirm_backend"] = result.get("confirm_backend")
                 # Default Odoo confirm observable fields (safe no-op for Woo path).
                 if state.get("capability") == "warehouse.adjust_inventory":
                     state["readiness_status"] = "ready"
@@ -311,6 +315,7 @@ def execute_action(state: dict) -> dict:
                     state["selected_backend"] = "internal_sandbox"
                     state["final_backend"] = "internal_sandbox"
                     state["backend_selection_reason"] = "confirm_controlled_write"
+                    state["confirm_backend"] = state.get("confirm_backend") or "internal_sandbox"
                 if rpa_meta:
                     state["execution_mode"] = rpa_meta.get("execution_mode", "rpa")
                     state["execution_backend"] = rpa_meta.get("execution_backend", "rpa_local_fake")
@@ -348,6 +353,15 @@ def execute_action(state: dict) -> dict:
                 prf = result.get("parsed_result")
                 if isinstance(prf, dict):
                     state["parsed_result"] = prf
+                # Preserve observable fields on confirm failure when available (P6.1 negative cases).
+                if result.get("provider_id"):
+                    state["provider_id"] = result.get("provider_id")
+                if result.get("capability"):
+                    state["capability"] = result.get("capability")
+                if result.get("platform"):
+                    state["platform"] = result.get("platform")
+                if result.get("confirm_backend"):
+                    state["confirm_backend"] = result.get("confirm_backend")
                 err_msg = str(result.get("error") or "确认失败")
                 failure_layer = _extract_confirm_failure_layer(result)
                 state["failure_layer"] = failure_layer
@@ -725,8 +739,43 @@ def execute_task_confirmation(executor, state: dict, slots: dict) -> dict:
         # P6.1: For Odoo adjust_inventory, confirm must read structured risk context from TaskSteps,
         # never parse natural language summary.
         risk_ctx = _load_risk_context_from_steps(db, target_task_id=confirmed_task_id)
-        if isinstance(risk_ctx, dict) and risk_ctx.get("capability") == "warehouse.adjust_inventory":
-            return _confirm_execute_odoo_adjust_inventory(db, state=state, current_task_id=current_task_id, target_task_id=confirmed_task_id, ctx=risk_ctx, task_record=task_record)
+        is_adjust_inventory = str(task_record.result_summary or "").startswith("[warehouse.adjust_inventory]")
+        if is_adjust_inventory:
+            if not (isinstance(risk_ctx, dict) and risk_ctx.get("capability") == "warehouse.adjust_inventory"):
+                layer = "confirm_context_missing"
+                return {
+                    "error": f"[{layer}] 目标任务缺少 risk_context，禁止回退到文案解析",
+                    "error_code": layer,
+                    "platform": "odoo",
+                    "provider_id": "odoo",
+                    "capability": "warehouse.adjust_inventory",
+                    "confirm_backend": "none",
+                    "target_task_id": confirmed_task_id,
+                    "original_update_task_id": confirmed_task_id,
+                    "confirm_task_id": current_task_id or None,
+                    "parsed_result": {
+                        "failure_layer": layer,
+                        "operation_result": "confirm_blocked_noop",
+                        "verify_passed": False,
+                        "verify_reason": layer,
+                        "old_inventory": None,
+                        "delta": None,
+                        "target_inventory": None,
+                        "post_inventory": None,
+                        "target_task_id": confirmed_task_id,
+                        "original_update_task_id": confirmed_task_id,
+                        "confirm_task_id": current_task_id or None,
+                        "confirm_backend": "none",
+                    },
+                }
+            return _confirm_execute_odoo_adjust_inventory(
+                db,
+                state=state,
+                current_task_id=current_task_id,
+                target_task_id=confirmed_task_id,
+                ctx=risk_ctx,
+                task_record=task_record,
+            )
         
         # Parse the original intent from task record
         # The intent_text should contain the original price update command
@@ -1124,6 +1173,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "platform": "odoo",
         "provider_id": provider_id,
         "capability": "warehouse.adjust_inventory",
+        "confirm_backend": "internal_sandbox",
         "sku": sku,
         "old_inventory": old_inv,
         "delta": delta,
@@ -1149,6 +1199,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "target_task_id": target_task_id,
         "original_update_task_id": target_task_id,
         "confirm_task_id": current_task_id or None,
+        "confirm_backend": "internal_sandbox",
     }
     return result
 
