@@ -194,6 +194,64 @@ def summarize_p62(*, base_url: str, limit: int, task_prefix: str, recent_limit: 
     }
 
 
+def replay_p62_task(*, base_url: str, task_id: str) -> dict:
+    detail = _fetch_json(f"{base_url.rstrip('/')}/api/v1/tasks/{task_id}")
+    detail = detail if isinstance(detail, dict) else {}
+    steps = _fetch_json(f"{base_url.rstrip('/')}/api/v1/tasks/{task_id}/steps")
+    steps = steps if isinstance(steps, list) else []
+    fields = _extract_confirm_fields(detail, steps)
+
+    op = str(fields.get("operation_result") or "")
+    fl = str(fields.get("failure_layer") or "")
+    verify_passed_raw = str(fields.get("verify_passed") or "").strip().lower()
+    verify_passed = verify_passed_raw in {"true", "1", "yes"}
+
+    # Single-sample to gate mapping follows the same rule family as gate_precheck.
+    if op == "write_adjust_inventory_verify_failed" or fl == "verify_failed":
+        gate_status = "block"
+        layer = fl or "verify_failed"
+        gate_reason = f"verify_fail_present:{layer}"
+        risk_flags = sorted({"verify_fail_present", VERIFY_FAILED_LAYER_TO_FLAG.get(layer, "verify_failure_other_present")})
+        summary_bucket = "verify_fail_count"
+    elif op == "confirm_blocked_noop":
+        gate_status = "warn"
+        layer = fl or "unknown"
+        gate_reason = f"confirm_blocked_present:{layer}"
+        risk_flags = sorted({"confirm_blocked_present", CONFIRM_BLOCKED_LAYER_TO_FLAG.get(layer, "confirm_blocked_other_present")})
+        summary_bucket = "confirm_blocked_count"
+    elif op == "write_adjust_inventory" and verify_passed:
+        gate_status = "pass"
+        gate_reason = "no_risk_signal"
+        risk_flags = ["none"]
+        summary_bucket = "verify_pass_count"
+    else:
+        gate_status = "warn"
+        gate_reason = "sample_unclassified:manual_review"
+        risk_flags = ["sample_unclassified"]
+        summary_bucket = "unclassified"
+
+    return {
+        "task_id": str(task_id or ""),
+        "capability": str(fields.get("capability") or ""),
+        "provider_id": str(fields.get("provider_id") or ""),
+        "operation_result": op,
+        "verify_passed": fields.get("verify_passed"),
+        "verify_reason": str(fields.get("verify_reason") or ""),
+        "failure_layer": fl,
+        "confirm_backend": str(fields.get("confirm_backend") or ""),
+        "gate_status": gate_status,
+        "gate_reason": gate_reason,
+        "risk_flags": risk_flags,
+        "summary_bucket": summary_bucket,
+        "explain": {
+            "operation_result": op,
+            "failure_layer": fl,
+            "verify_reason": str(fields.get("verify_reason") or ""),
+            "mapping_rule": summary_bucket,
+        },
+    }
+
+
 def build_p62_gate_precheck(summary: dict) -> dict:
     counts = {
         "initiated_high_risk_tasks": int(summary.get("initiated_high_risk_tasks") or 0),
@@ -274,7 +332,17 @@ def main() -> int:
     parser.add_argument("--task-prefix", default="TASK-")
     parser.add_argument("--recent-limit", type=int, default=20)
     parser.add_argument("--with-gate", action="store_true")
+    parser.add_argument("--task-id", default="")
     args = parser.parse_args()
+    task_id = str(args.task_id or "").strip()
+    if task_id:
+        out = replay_p62_task(
+            base_url=str(args.base_url),
+            task_id=task_id,
+        )
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
     out = summarize_p62(
         base_url=str(args.base_url),
         limit=max(1, int(args.limit)),

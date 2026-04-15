@@ -362,3 +362,154 @@ def test_p62_gate_precheck_confirm_layer_priority_stable():
     assert out["gate_status"] == "warn"
     assert out["gate_reason"] == "confirm_blocked_present:confirm_context_invalid_json"
     assert "confirm_context_invalid_json_present" in out["risk_flags"]
+
+
+def test_p62_replay_task_blocked_sample_consistent(monkeypatch):
+    mod = _load_script_module()
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self._body).encode("utf-8")
+
+    def _urlopen(req, timeout=10):  # noqa: ARG001
+        url = req.full_url
+        if url.endswith("/tasks/TASK-P62-CB-1"):
+            return _Resp({"task_id": "TASK-P62-CB-1", "status": "failed"})
+        if url.endswith("/tasks/TASK-P62-CB-1/steps"):
+            return _Resp(
+                [
+                    {
+                        "step_code": "action_executed",
+                        "detail": "provider_id=odoo, capability=warehouse.adjust_inventory, operation_result=confirm_blocked_noop, verify_passed=False, verify_reason=confirm_context_invalid_json, failure_layer=confirm_context_invalid_json, confirm_backend=none",
+                    }
+                ]
+            )
+        raise RuntimeError(f"unexpected url: {url}")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    out = mod.replay_p62_task(base_url="http://127.0.0.1:8000", task_id="TASK-P62-CB-1")
+    assert out["task_id"] == "TASK-P62-CB-1"
+    assert out["gate_status"] == "warn"
+    assert out["gate_reason"] == "confirm_blocked_present:confirm_context_invalid_json"
+    assert "confirm_blocked_present" in out["risk_flags"]
+    assert "confirm_context_invalid_json_present" in out["risk_flags"]
+    assert out["summary_bucket"] == "confirm_blocked_count"
+
+
+def test_p62_replay_task_verify_fail_sample_consistent(monkeypatch):
+    mod = _load_script_module()
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self._body).encode("utf-8")
+
+    def _urlopen(req, timeout=10):  # noqa: ARG001
+        url = req.full_url
+        if url.endswith("/tasks/TASK-P62-VF-1"):
+            return _Resp(
+                {
+                    "task_id": "TASK-P62-VF-1",
+                    "status": "failed",
+                    "parsed_result": {
+                        "operation_result": "write_adjust_inventory_verify_failed",
+                        "verify_passed": False,
+                        "verify_reason": "forced_verify_failure expected=105 got=105",
+                        "failure_layer": "verify_failed",
+                        "capability": "warehouse.adjust_inventory",
+                        "provider_id": "odoo",
+                    },
+                }
+            )
+        if url.endswith("/tasks/TASK-P62-VF-1/steps"):
+            return _Resp([{"step_code": "action_executed", "detail": ""}])
+        raise RuntimeError(f"unexpected url: {url}")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    out = mod.replay_p62_task(base_url="http://127.0.0.1:8000", task_id="TASK-P62-VF-1")
+    assert out["task_id"] == "TASK-P62-VF-1"
+    assert out["gate_status"] == "block"
+    assert out["gate_reason"] == "verify_fail_present:verify_failed"
+    assert "verify_fail_present" in out["risk_flags"]
+    assert "verify_failed_present" in out["risk_flags"]
+    assert out["summary_bucket"] == "verify_fail_count"
+
+
+def test_p62_replay_task_output_shape_stable(monkeypatch):
+    mod = _load_script_module()
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self._body).encode("utf-8")
+
+    def _urlopen(req, timeout=10):  # noqa: ARG001
+        url = req.full_url
+        if url.endswith("/tasks/TASK-P62-OK-1"):
+            return _Resp(
+                {
+                    "task_id": "TASK-P62-OK-1",
+                    "status": "succeeded",
+                    "parsed_result": {
+                        "operation_result": "write_adjust_inventory",
+                        "verify_passed": True,
+                        "verify_reason": "ok",
+                        "failure_layer": "",
+                        "capability": "warehouse.adjust_inventory",
+                        "provider_id": "odoo",
+                        "confirm_backend": "internal_sandbox",
+                    },
+                }
+            )
+        if url.endswith("/tasks/TASK-P62-OK-1/steps"):
+            return _Resp([{"step_code": "action_executed", "detail": ""}])
+        raise RuntimeError(f"unexpected url: {url}")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    out = mod.replay_p62_task(base_url="http://127.0.0.1:8000", task_id="TASK-P62-OK-1")
+    assert set(out.keys()) == {
+        "task_id",
+        "capability",
+        "provider_id",
+        "operation_result",
+        "verify_passed",
+        "verify_reason",
+        "failure_layer",
+        "confirm_backend",
+        "gate_status",
+        "gate_reason",
+        "risk_flags",
+        "summary_bucket",
+        "explain",
+    }

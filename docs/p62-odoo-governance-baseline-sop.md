@@ -131,6 +131,7 @@
 ### 9.1 输出入口
 
 - 命令：`python3 script/p62_odoo_adjust_inventory_governance_summary.py --with-gate`
+- 单样本回放：`python3 script/p62_odoo_adjust_inventory_governance_summary.py --task-id <TASK_ID>`
 - 输出结构：
   - `summary`：第一轮最小统计口径
   - `gate_precheck`：第二轮最小门禁前置判定输出
@@ -144,6 +145,30 @@
 - `risk_flags`：风险标签列表（如 `confirm_blocked_present`、`verify_fail_present`、`sample_insufficient`）
 - `summary_counts`：门禁消费的统计概览
 - `latest_samples`：最近样本摘要（便于快速抽样核验）
+
+### 9.2.1 `--task-id` 单样本回放输出
+
+单样本输出（稳定字段）：
+
+- `task_id`
+- `capability`
+- `provider_id`
+- `operation_result`
+- `verify_passed`
+- `verify_reason`
+- `failure_layer`
+- `confirm_backend`
+- `gate_status`
+- `gate_reason`
+- `risk_flags`
+- `summary_bucket`
+- `explain`
+
+解读方式：
+
+- `gate_status/gate_reason/risk_flags`：该样本按当前 gate 规则映射后的最小解释
+- `summary_bucket`：该样本在总览统计中的归类口径（例如 `confirm_blocked_count` / `verify_fail_count` / `verify_pass_count`）
+- `explain`：用于人工复核映射依据（`operation_result/failure_layer/verify_reason`）
 
 ### 9.3 最小规则（固定口径）
 
@@ -198,3 +223,14 @@ verify 失败类（`gate_status=block`，`gate_reason=verify_fail_present:<failu
 
 - 先看 `gate_reason`（主原因，已按固定优先级选择）
 - 再看 `risk_flags`（列出所有并发风险，不丢信息）
+
+### 9.5 单样本回放与总览的一致性关系
+
+- 单样本回放负责解释“这 1 条样本为什么被判成某种 gate 结果”。
+- 总览 `gate_precheck` 负责解释“当前批量样本整体应判成 pass/warn/block”。
+- 两者使用同一套规则族：
+  - `confirm_blocked_noop` -> confirm 阻断口径
+  - `write_adjust_inventory_verify_failed / verify_failed` -> verify 失败口径
+  - `write_adjust_inventory + verify_passed=True` -> 通过口径
+
+说明：这仍是 P6.2 的前置判定层，不是 P6.3 的全量门禁系统。
