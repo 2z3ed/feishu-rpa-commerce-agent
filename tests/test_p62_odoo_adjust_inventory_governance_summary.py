@@ -122,6 +122,7 @@ def test_p62_governance_summary_counts(monkeypatch):
     assert out["verify_pass_count"] == 1
     assert out["verify_fail_count"] == 1
     assert out["block_reason_distribution"] == {"confirm_context_missing": 1}
+    assert out["verify_failure_layer_distribution"] == {"verify_failed": 1}
     assert out["verify_reason_distribution"] == {"forced_verify_failure expected=105 got=105": 1}
 
 
@@ -184,6 +185,7 @@ def test_p62_governance_summary_fallback_from_action_detail(monkeypatch):
     assert out["verify_pass_count"] == 0
     assert out["verify_fail_count"] == 0
     assert out["block_reason_distribution"] == {"confirm_context_invalid_json": 1}
+    assert out["verify_failure_layer_distribution"] == {}
 
 
 def test_p62_gate_precheck_pass_when_no_risk():
@@ -196,6 +198,7 @@ def test_p62_gate_precheck_pass_when_no_risk():
         "verify_pass_count": 4,
         "verify_fail_count": 0,
         "block_reason_distribution": {},
+        "verify_failure_layer_distribution": {},
         "verify_reason_distribution": {},
         "recent_samples": [{"task_id": "TASK-P62-C1"}],
     }
@@ -213,6 +216,7 @@ def test_p62_gate_precheck_pass_when_no_risk():
         "verify_pass_count",
         "verify_fail_count",
     }
+    assert "verify_failure_layer_distribution" in out
 
 
 def test_p62_gate_precheck_warn_for_confirm_blocked():
@@ -225,6 +229,7 @@ def test_p62_gate_precheck_warn_for_confirm_blocked():
         "verify_pass_count": 4,
         "verify_fail_count": 0,
         "block_reason_distribution": {"confirm_context_missing": 2},
+        "verify_failure_layer_distribution": {},
         "verify_reason_distribution": {},
         "recent_samples": [{"task_id": "TASK-P62-C2"}],
     }
@@ -234,6 +239,7 @@ def test_p62_gate_precheck_warn_for_confirm_blocked():
     assert out["allow_adjust_inventory_flow"] is True
     assert out["has_blocking_risk"] is False
     assert "confirm_blocked_present" in out["risk_flags"]
+    assert "confirm_context_missing_present" in out["risk_flags"]
 
 
 def test_p62_gate_precheck_block_for_verify_fail():
@@ -246,15 +252,17 @@ def test_p62_gate_precheck_block_for_verify_fail():
         "verify_pass_count": 4,
         "verify_fail_count": 1,
         "block_reason_distribution": {},
+        "verify_failure_layer_distribution": {"verify_failed": 1},
         "verify_reason_distribution": {"forced_verify_failure expected=105 got=105": 1},
         "recent_samples": [{"task_id": "TASK-P62-C3"}],
     }
     out = mod.build_p62_gate_precheck(summary)
     assert out["gate_status"] == "block"
-    assert out["gate_reason"] == "verify_fail_present:forced_verify_failure expected=105 got=105"
+    assert out["gate_reason"] == "verify_fail_present:verify_failed"
     assert out["allow_adjust_inventory_flow"] is False
     assert out["has_blocking_risk"] is True
     assert "verify_fail_present" in out["risk_flags"]
+    assert "verify_failed_present" in out["risk_flags"]
 
 
 def test_p62_gate_precheck_warn_for_sample_insufficient():
@@ -267,6 +275,7 @@ def test_p62_gate_precheck_warn_for_sample_insufficient():
         "verify_pass_count": 1,
         "verify_fail_count": 0,
         "block_reason_distribution": {},
+        "verify_failure_layer_distribution": {},
         "verify_reason_distribution": {},
         "recent_samples": [{"task_id": "TASK-P62-C5"}],
     }
@@ -288,6 +297,7 @@ def test_p62_gate_precheck_output_shape_stable():
         "verify_pass_count": 4,
         "verify_fail_count": 0,
         "block_reason_distribution": {},
+        "verify_failure_layer_distribution": {},
         "verify_reason_distribution": {},
         "recent_samples": [{"task_id": "TASK-P62-C1"}],
     }
@@ -300,6 +310,55 @@ def test_p62_gate_precheck_output_shape_stable():
         "risk_flags",
         "summary_counts",
         "block_reason_distribution",
+        "verify_failure_layer_distribution",
         "verify_reason_distribution",
         "latest_samples",
     }
+
+
+def test_p62_gate_precheck_reason_priority_multi_risks():
+    mod = _load_script_module()
+    summary = {
+        "initiated_high_risk_tasks": 2,  # insufficient samples
+        "awaiting_confirmation_count": 5,  # summary anomaly
+        "confirm_released_count": 3,
+        "confirm_blocked_count": 2,
+        "verify_pass_count": 2,
+        "verify_fail_count": 1,
+        "block_reason_distribution": {"confirm_context_invalid_shape": 2},
+        "verify_failure_layer_distribution": {"verify_failed": 1},
+        "verify_reason_distribution": {"forced_verify_failure expected=105 got=105": 1},
+        "recent_samples": [{"task_id": "TASK-P62-C6"}],
+    }
+    out = mod.build_p62_gate_precheck(summary)
+    # Stable priority: verify_fail > confirm_blocked > summary_anomaly > sample_insufficient.
+    assert out["gate_status"] == "block"
+    assert out["gate_reason"] == "verify_fail_present:verify_failed"
+    assert "sample_insufficient" in out["risk_flags"]
+    assert "summary_counts_anomaly" in out["risk_flags"]
+    assert "confirm_blocked_present" in out["risk_flags"]
+    assert "verify_fail_present" in out["risk_flags"]
+
+
+def test_p62_gate_precheck_confirm_layer_priority_stable():
+    mod = _load_script_module()
+    summary = {
+        "initiated_high_risk_tasks": 5,
+        "awaiting_confirmation_count": 0,
+        "confirm_released_count": 3,
+        "confirm_blocked_count": 2,
+        "verify_pass_count": 3,
+        "verify_fail_count": 0,
+        # Multiple blocked layers, pick by fixed priority, not dict order.
+        "block_reason_distribution": {
+            "confirm_context_incomplete": 10,
+            "confirm_context_invalid_json": 1,
+        },
+        "verify_failure_layer_distribution": {},
+        "verify_reason_distribution": {},
+        "recent_samples": [{"task_id": "TASK-P62-C7"}],
+    }
+    out = mod.build_p62_gate_precheck(summary)
+    assert out["gate_status"] == "warn"
+    assert out["gate_reason"] == "confirm_blocked_present:confirm_context_invalid_json"
+    assert "confirm_context_invalid_json_present" in out["risk_flags"]

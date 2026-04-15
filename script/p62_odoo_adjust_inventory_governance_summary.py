@@ -10,6 +10,32 @@ from collections import Counter
 
 MIN_SAMPLE_SIZE = 3
 
+CONFIRM_BLOCKED_LAYER_PRIORITY = [
+    "confirm_context_missing",
+    "confirm_context_invalid_json",
+    "confirm_context_invalid_shape",
+    "confirm_context_incomplete",
+    "provider_readiness_failed",
+]
+
+VERIFY_FAILED_LAYER_PRIORITY = [
+    "verify_failed",
+    "provider_readiness_failed",
+]
+
+CONFIRM_BLOCKED_LAYER_TO_FLAG = {
+    "confirm_context_missing": "confirm_context_missing_present",
+    "confirm_context_invalid_json": "confirm_context_invalid_json_present",
+    "confirm_context_invalid_shape": "confirm_context_invalid_shape_present",
+    "confirm_context_incomplete": "confirm_context_incomplete_present",
+    "provider_readiness_failed": "readiness_failure_present",
+}
+
+VERIFY_FAILED_LAYER_TO_FLAG = {
+    "verify_failed": "verify_failed_present",
+    "provider_readiness_failed": "readiness_failure_present",
+}
+
 
 def _fetch_json(url: str, timeout: float = 10.0):
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -64,6 +90,22 @@ def _extract_confirm_fields(task_detail: dict, step_items: list[dict]) -> dict:
     }
 
 
+def _pick_primary_reason(distribution: dict, priority: list[str]) -> str:
+    if not isinstance(distribution, dict) or not distribution:
+        return "unknown"
+    for key in priority:
+        if int(distribution.get(key) or 0) > 0:
+            return key
+    # Stable fallback: highest count first, tie-break by key name.
+    items = sorted(
+        ((str(k), int(v or 0)) for k, v in distribution.items()),
+        key=lambda x: (-x[1], x[0]),
+    )
+    if not items:
+        return "unknown"
+    return items[0][0]
+
+
 def summarize_p62(*, base_url: str, limit: int, task_prefix: str, recent_limit: int) -> dict:
     q = urllib.parse.urlencode({"limit": str(limit)})
     tasks = _fetch_json(f"{base_url.rstrip('/')}/api/v1/tasks?{q}")
@@ -92,6 +134,7 @@ def summarize_p62(*, base_url: str, limit: int, task_prefix: str, recent_limit: 
     verify_pass = 0
     verify_fail = 0
     block_reason_distribution: Counter[str] = Counter()
+    verify_failure_layer_distribution: Counter[str] = Counter()
     verify_reason_distribution: Counter[str] = Counter()
     recent_samples: list[dict] = []
 
@@ -116,6 +159,7 @@ def summarize_p62(*, base_url: str, limit: int, task_prefix: str, recent_limit: 
             verify_pass += 1
         if op == "write_adjust_inventory_verify_failed" or (fl == "verify_failed" and not vp):
             verify_fail += 1
+            verify_failure_layer_distribution[str(fl or "verify_failed")] += 1
             verify_reason_distribution[str(fields["verify_reason"] or "unknown")] += 1
 
         recent_samples.append(
@@ -144,6 +188,7 @@ def summarize_p62(*, base_url: str, limit: int, task_prefix: str, recent_limit: 
         "verify_pass_count": verify_pass,
         "verify_fail_count": verify_fail,
         "block_reason_distribution": dict(sorted(block_reason_distribution.items())),
+        "verify_failure_layer_distribution": dict(sorted(verify_failure_layer_distribution.items())),
         "verify_reason_distribution": dict(sorted(verify_reason_distribution.items())),
         "recent_samples": recent_samples[: max(1, int(recent_limit))],
     }
@@ -159,6 +204,7 @@ def build_p62_gate_precheck(summary: dict) -> dict:
         "verify_fail_count": int(summary.get("verify_fail_count") or 0),
     }
     block_reason_distribution = summary.get("block_reason_distribution") or {}
+    verify_failure_layer_distribution = summary.get("verify_failure_layer_distribution") or {}
     verify_reason_distribution = summary.get("verify_reason_distribution") or {}
     latest_samples = summary.get("recent_samples") or []
 
@@ -167,32 +213,45 @@ def build_p62_gate_precheck(summary: dict) -> dict:
     gate_reason = "no_risk_signal"
 
     # Sample sufficiency should be explicit for P6.2 precheck.
+    # Collect normalized risk labels first.
     if counts["initiated_high_risk_tasks"] < MIN_SAMPLE_SIZE:
         risk_flags.append("sample_insufficient")
-        gate_status = "warn"
-        gate_reason = f"insufficient_samples_lt_{MIN_SAMPLE_SIZE}"
-
-    if counts["confirm_blocked_count"] > 0:
-        risk_flags.append("confirm_blocked_present")
-        if gate_status != "block":
-            gate_status = "warn"
-            primary = sorted(block_reason_distribution.keys())[0] if block_reason_distribution else "unknown"
-            gate_reason = f"confirm_blocked_present:{primary}"
-
-    if counts["verify_fail_count"] > 0:
-        risk_flags.append("verify_fail_present")
-        gate_status = "block"
-        primary_verify_reason = sorted(verify_reason_distribution.keys())[0] if verify_reason_distribution else "unknown"
-        gate_reason = f"verify_fail_present:{primary_verify_reason}"
 
     if counts["awaiting_confirmation_count"] > counts["initiated_high_risk_tasks"] and counts["initiated_high_risk_tasks"] > 0:
         risk_flags.append("summary_counts_anomaly")
-        if gate_status != "block":
-            gate_status = "warn"
-            gate_reason = "summary_counts_anomaly:awaiting_gt_initiated"
+
+    if counts["confirm_blocked_count"] > 0:
+        risk_flags.append("confirm_blocked_present")
+        primary_block_layer = _pick_primary_reason(block_reason_distribution, CONFIRM_BLOCKED_LAYER_PRIORITY)
+        risk_flags.append(CONFIRM_BLOCKED_LAYER_TO_FLAG.get(primary_block_layer, "confirm_blocked_other_present"))
+
+    if counts["verify_fail_count"] > 0:
+        risk_flags.append("verify_fail_present")
+        primary_verify_layer = _pick_primary_reason(verify_failure_layer_distribution, VERIFY_FAILED_LAYER_PRIORITY)
+        risk_flags.append(VERIFY_FAILED_LAYER_TO_FLAG.get(primary_verify_layer, "verify_failure_other_present"))
+
+    # Stable priority rule for gate_reason:
+    # verify_fail > confirm_blocked > summary_anomaly > sample_insufficient > no_risk.
+    if counts["verify_fail_count"] > 0:
+        gate_status = "block"
+        primary_verify_layer = _pick_primary_reason(verify_failure_layer_distribution, VERIFY_FAILED_LAYER_PRIORITY)
+        gate_reason = f"verify_fail_present:{primary_verify_layer}"
+    elif counts["confirm_blocked_count"] > 0:
+        gate_status = "warn"
+        primary_block_layer = _pick_primary_reason(block_reason_distribution, CONFIRM_BLOCKED_LAYER_PRIORITY)
+        gate_reason = f"confirm_blocked_present:{primary_block_layer}"
+    elif "summary_counts_anomaly" in risk_flags:
+        gate_status = "warn"
+        gate_reason = "summary_counts_anomaly:awaiting_gt_initiated"
+    elif "sample_insufficient" in risk_flags:
+        gate_status = "warn"
+        gate_reason = f"insufficient_samples_lt_{MIN_SAMPLE_SIZE}"
 
     if not risk_flags:
         risk_flags.append("none")
+    else:
+        # Stable ordering for risk flags.
+        risk_flags = sorted(set(risk_flags))
 
     return {
         "gate_status": gate_status,
@@ -202,6 +261,7 @@ def build_p62_gate_precheck(summary: dict) -> dict:
         "risk_flags": risk_flags,
         "summary_counts": counts,
         "block_reason_distribution": dict(sorted((block_reason_distribution or {}).items())),
+        "verify_failure_layer_distribution": dict(sorted((verify_failure_layer_distribution or {}).items())),
         "verify_reason_distribution": dict(sorted((verify_reason_distribution or {}).items())),
         "latest_samples": latest_samples[:5],
     }

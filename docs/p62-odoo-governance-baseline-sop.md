@@ -153,8 +153,48 @@
 - 出现 verify 失败（`verify_fail_count > 0`）：`gate_status=block`，`gate_reason=verify_fail_present:<primary_reason>`
 - 如出现统计矛盾（例如 `awaiting_confirmation_count > initiated_high_risk_tasks`）：`gate_status=warn`
 
+#### gate_reason 主原因选择优先级（第三轮稳定化）
+
+固定优先级（从高到低）：
+
+1. `verify_fail_present`
+2. `confirm_blocked_present`
+3. `summary_counts_anomaly`
+4. `sample_insufficient`
+5. `no_risk_signal`
+
+说明：
+
+- 不使用字典序作为主原因选择依据。
+- 多风险并存时，永远按上述优先级选主原因。
+- 同类原因内部：
+  - `confirm_blocked_present` 的 `primary_reason` 按固定层级优先：  
+    `confirm_context_missing` > `confirm_context_invalid_json` > `confirm_context_invalid_shape` > `confirm_context_incomplete` > `provider_readiness_failed` > 其它
+  - `verify_fail_present` 的 `primary_reason` 按固定层级优先：  
+    `verify_failed` > `provider_readiness_failed` > 其它
+
+#### failure_layer → gate 输出映射（第三轮稳定化）
+
+confirm 阻断类（`gate_status=warn`，`gate_reason=confirm_blocked_present:<failure_layer>`）：
+
+- `confirm_context_missing` → `risk_flags` 包含 `confirm_blocked_present` + `confirm_context_missing_present`
+- `confirm_context_invalid_json` → `risk_flags` 包含 `confirm_blocked_present` + `confirm_context_invalid_json_present`
+- `confirm_context_invalid_shape` → `risk_flags` 包含 `confirm_blocked_present` + `confirm_context_invalid_shape_present`
+- `confirm_context_incomplete` → `risk_flags` 包含 `confirm_blocked_present` + `confirm_context_incomplete_present`
+- `provider_readiness_failed`（若出现）→ `risk_flags` 包含 `confirm_blocked_present` + `readiness_failure_present`
+
+verify 失败类（`gate_status=block`，`gate_reason=verify_fail_present:<failure_layer>`）：
+
+- `verify_failed` → `risk_flags` 包含 `verify_fail_present` + `verify_failed_present`
+- `provider_readiness_failed`（若出现）→ `risk_flags` 包含 `verify_fail_present` + `readiness_failure_present`
+
 ### 9.4 三类典型结果解释
 
 - `pass`：当前样板链无显著风险信号，可继续按 SOP 运行
 - `warn`：存在可观察风险信号或样本不足，需人工复核样本
 - `block`：存在 verify 失败信号，当前样板链应阻断并先定位原因
+
+多风险同时出现时解释：
+
+- 先看 `gate_reason`（主原因，已按固定优先级选择）
+- 再看 `risk_flags`（列出所有并发风险，不丢信息）
