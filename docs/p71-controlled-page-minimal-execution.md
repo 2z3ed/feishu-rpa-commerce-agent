@@ -101,8 +101,22 @@ python -m app.bridge.yingdao_local_bridge
 ```bash
 python script/p70_yingdao_bridge_rehearsal.py --sample success
 python script/p70_yingdao_bridge_rehearsal.py --sample page_failure
+python script/p70_yingdao_bridge_rehearsal.py --sample timeout
 python script/p70_yingdao_bridge_rehearsal.py --sample verify_fail
 ```
+
+---
+
+## 6.1 端到端人工核查（收口准备）
+
+建议使用 `--task-id` 生成单样本回放摘要，并与 `/tasks/{confirm_task_id}/steps` 的 `action_executed.detail` 对照：
+
+```bash
+python script/p70_yingdao_bridge_rehearsal.py --sample success --task-id TASK-MANUAL-1 --confirm-task-id TASK-MANUAL-CFM-1
+curl -s "http://127.0.0.1:8000/api/v1/tasks/TASK-MANUAL-CFM-1/steps"
+```
+
+对照项以脚本输出的 `task_id_replay.steps_checklist` 为准。
 
 ---
 
