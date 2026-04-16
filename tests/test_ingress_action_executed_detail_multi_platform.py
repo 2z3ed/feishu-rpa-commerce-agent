@@ -379,6 +379,11 @@ def test_action_executed_detail_contains_yingdao_bridge_fields(monkeypatch):
                     "confirm_task_id": task_id,
                     "original_update_task_id": "TASK-ORIG-2",
                     "evidence_paths": ["/tmp/yingdao/shot.png"],
+                    "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/catalog?sku=A001",
+                    "page_profile": "internal_inventory_adjust_v1",
+                    "page_steps": ["open_page", "locate_sku", "submit", "read_page_echo"],
+                    "page_evidence_count": 1,
+                    "page_failure_code": "",
                 },
             },
         )
@@ -397,6 +402,8 @@ def test_action_executed_detail_contains_yingdao_bridge_fields(monkeypatch):
         assert "raw_result_path=/tmp/yingdao/result.json" in detail
         assert "operation_result=write_adjust_inventory" in detail
         assert "verify_passed=True" in detail
+        assert "page_profile=internal_inventory_adjust_v1" in detail
+        assert "page_steps=open_page|locate_sku|submit|read_page_echo" in detail
     finally:
         db.close()
 
@@ -474,6 +481,11 @@ def test_action_executed_detail_contains_yingdao_bridge_timeout_fields(monkeypat
                     "confirm_task_id": task_id,
                     "original_update_task_id": "TASK-ORIG-3",
                     "evidence_paths": [],
+                    "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/catalog?sku=A001",
+                    "page_profile": "internal_inventory_adjust_v1",
+                    "page_steps": ["open_page", "locate_sku"],
+                    "page_evidence_count": 0,
+                    "page_failure_code": "element_missing",
                 },
             },
         )
@@ -492,5 +504,6 @@ def test_action_executed_detail_contains_yingdao_bridge_timeout_fields(monkeypat
         assert "verify_passed=False" in detail
         assert "verify_reason=bridge_request_timeout" in detail
         assert "failure_layer=bridge_timeout" in detail
+        assert "page_failure_code=element_missing" in detail
     finally:
         db.close()

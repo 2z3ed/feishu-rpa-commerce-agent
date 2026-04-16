@@ -161,6 +161,12 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         raw_result_path = pr.get("raw_result_path", "")
         evidence_paths = pr.get("evidence_paths", [])
         evidence_paths_count = len(evidence_paths) if isinstance(evidence_paths, list) else 0
+        page_url = pr.get("page_url", "")
+        page_profile = pr.get("page_profile", "")
+        page_steps = pr.get("page_steps", [])
+        page_steps_text = "|".join([str(x) for x in page_steps]) if isinstance(page_steps, list) else ""
+        page_evidence_count = pr.get("page_evidence_count", 0)
+        page_failure_code = pr.get("page_failure_code", "")
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         detail = build_action_executed_detail(
             {
@@ -212,6 +218,11 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "rpa_vendor": rpa_vendor,
                 "raw_result_path": raw_result_path,
                 "evidence_paths_count": evidence_paths_count,
+                "page_url": page_url,
+                "page_profile": page_profile,
+                "page_steps": page_steps_text,
+                "page_evidence_count": page_evidence_count,
+                "page_failure_code": page_failure_code,
             }
         )
         log_step(

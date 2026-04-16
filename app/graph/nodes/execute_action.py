@@ -1188,6 +1188,11 @@ def _confirm_execute_odoo_adjust_inventory(
     rpa_vendor = ""
     raw_result_path = ""
     evidence_paths: list[str] = []
+    page_url = ""
+    page_profile = ""
+    page_steps: list[str] = []
+    page_evidence_count = 0
+    page_failure_code = ""
 
     if confirm_exec_backend == "yingdao_bridge":
         bridge_payload = {
@@ -1236,6 +1241,11 @@ def _confirm_execute_odoo_adjust_inventory(
         rpa_vendor = str(bridge_out.get("rpa_vendor") or "yingdao")
         raw_result_path = str(bridge_out.get("raw_result_path") or "")
         evidence_paths = [str(x) for x in (bridge_out.get("evidence_paths") or [])]
+        page_url = str(bridge_out.get("page_url") or "")
+        page_profile = str(bridge_out.get("page_profile") or "")
+        page_steps = [str(x) for x in (bridge_out.get("page_steps") or [])]
+        page_evidence_count = int(bridge_out.get("page_evidence_count") or len(evidence_paths))
+        page_failure_code = str(bridge_out.get("page_failure_code") or "")
         verify_passed = bool(bridge_out.get("verify_passed", False))
         verify_reason = str(bridge_out.get("verify_reason") or "")
         operation_result = str(bridge_out.get("operation_result") or "")
@@ -1320,6 +1330,11 @@ def _confirm_execute_odoo_adjust_inventory(
         "rpa_vendor": rpa_vendor,
         "raw_result_path": raw_result_path,
         "evidence_paths": evidence_paths,
+        "page_url": page_url,
+        "page_profile": page_profile,
+        "page_steps": page_steps,
+        "page_evidence_count": page_evidence_count,
+        "page_failure_code": page_failure_code,
         "sku": sku,
         "old_inventory": old_inv,
         "delta": delta,
@@ -1350,6 +1365,11 @@ def _confirm_execute_odoo_adjust_inventory(
         "rpa_vendor": rpa_vendor,
         "raw_result_path": raw_result_path,
         "evidence_paths": evidence_paths,
+        "page_url": page_url,
+        "page_profile": page_profile,
+        "page_steps": page_steps,
+        "page_evidence_count": page_evidence_count,
+        "page_failure_code": page_failure_code,
     }
     return result
 

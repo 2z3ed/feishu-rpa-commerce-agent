@@ -181,6 +181,11 @@ class Settings(BaseSettings):
     YINGDAO_BRIDGE_OUTPUT_DIR: str = "tmp/yingdao_bridge/outbox"
     YINGDAO_BRIDGE_WAIT_TIMEOUT_S: int = 20
     YINGDAO_BRIDGE_POLL_INTERVAL_MS: int = 200
+    # P7.1 PoC — controlled page minimal execution chain (still non-production).
+    # Allowed: file_exchange | controlled_page
+    YINGDAO_BRIDGE_EXECUTION_MODE: str = "file_exchange"
+    YINGDAO_CONTROLLED_PAGE_BASE_URL: str = "http://127.0.0.1:8000"
+    YINGDAO_CONTROLLED_PAGE_PROFILE: str = "internal_inventory_adjust_v1"
 
     class Config:
         env_file = ".env"

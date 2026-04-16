@@ -14,6 +14,8 @@ def _args(**kwargs):
         "target_inventory": 105,
         "environment": "local_poc",
         "force_verify_fail": False,
+        "page_profile": "internal_inventory_adjust_v1",
+        "page_failure_mode": "",
     }
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -21,10 +23,11 @@ def _args(**kwargs):
 
 def test_rehearsal_fixed_sample_payloads():
     s = rehearsal._build_payload(_args(sample="success"))
-    t = rehearsal._build_payload(_args(sample="timeout"))
+    p = rehearsal._build_payload(_args(sample="page_failure"))
     v = rehearsal._build_payload(_args(sample="verify_fail"))
     assert s["task_id"] == "TASK-P70-REHEARSAL-SUCCESS-1"
-    assert t["task_id"] == "TASK-P70-REHEARSAL-TIMEOUT-1"
+    assert p["task_id"] == "TASK-P71-REHEARSAL-PFAIL-1"
+    assert p["page_failure_mode"] == "element_missing"
     assert v["task_id"] == "TASK-P70-REHEARSAL-VFAIL-1"
     assert v["force_verify_fail"] is True
 

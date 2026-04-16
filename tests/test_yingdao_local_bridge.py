@@ -135,3 +135,89 @@ def test_bridge_input_write_failed(monkeypatch):
         assert False, "expected BridgeJobError"
     except bridge_mod.BridgeJobError as exc:
         assert exc.failure_layer == "bridge_input_write_failed"
+
+
+def test_bridge_run_controlled_page_success(monkeypatch):
+    old_mode = bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE
+    bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = "controlled_page"
+
+    class _Resp:
+        def __init__(self, data: str):
+            self._data = data.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._data
+
+    def _fake_urlopen(req, timeout=30):  # noqa: ARG001
+        url = req.full_url
+        if "admin-like/catalog" in url:
+            return _Resp("<html>ok</html>")
+        if "inventory/adjust" in url:
+            return _Resp('{"provider":"odoo","payload":{"qty_after":105}}')
+        return _Resp("{}")
+
+    monkeypatch.setattr(bridge_mod, "urlopen", _fake_urlopen)
+    try:
+        out = bridge_mod.run_bridge_job(
+            {
+                "task_id": "TASK-P71-LOCAL-BRIDGE-SUCCESS",
+                "confirm_task_id": "TASK-P71-LOCAL-BRIDGE-CFM-SUCCESS",
+                "provider_id": "odoo",
+                "capability": "warehouse.adjust_inventory",
+                "sku": "A001",
+                "delta": 5,
+                "old_inventory": 100,
+                "target_inventory": 105,
+            }
+        )
+    finally:
+        bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = old_mode
+
+    assert out["operation_result"] == "write_adjust_inventory"
+    assert out["verify_passed"] is True
+    assert out["page_profile"] == "internal_inventory_adjust_v1"
+    assert out["page_steps"] == ["open_page", "locate_sku", "input_delta_target_inventory", "submit", "read_page_echo"]
+
+
+def test_bridge_run_controlled_page_element_missing(monkeypatch):
+    old_mode = bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE
+    bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = "controlled_page"
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"<html>ok</html>"
+
+    monkeypatch.setattr(bridge_mod, "urlopen", lambda req, timeout=30: _Resp())  # noqa: ARG005
+    try:
+        out = bridge_mod.run_bridge_job(
+            {
+                "task_id": "TASK-P71-LOCAL-BRIDGE-PFAIL",
+                "confirm_task_id": "TASK-P71-LOCAL-BRIDGE-CFM-PFAIL",
+                "provider_id": "odoo",
+                "capability": "warehouse.adjust_inventory",
+                "sku": "A001",
+                "delta": 5,
+                "old_inventory": 100,
+                "target_inventory": 105,
+                "page_failure_mode": "element_missing",
+            }
+        )
+    finally:
+        bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = old_mode
+
+    assert out["operation_result"] == "write_adjust_inventory_bridge_page_failed"
+    assert out["failure_layer"] == "bridge_page_failed"
+    assert out["verify_passed"] is False
+    assert out["page_failure_code"] == "element_missing"
