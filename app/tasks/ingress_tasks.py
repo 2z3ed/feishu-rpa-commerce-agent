@@ -167,6 +167,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         page_steps_text = "|".join([str(x) for x in page_steps]) if isinstance(page_steps, list) else ""
         page_evidence_count = pr.get("page_evidence_count", 0)
         page_failure_code = pr.get("page_failure_code", "")
+        gate_allow = result.get("gate_allow", pr.get("gate_allow", None))
+        gate_status = result.get("gate_status", pr.get("gate_status", ""))
+        gate_reason = result.get("gate_reason", pr.get("gate_reason", ""))
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         detail = build_action_executed_detail(
             {
@@ -205,6 +208,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "operation_result": operation_result,
                 "confirm_backend": confirm_backend,
                 "failure_layer": failure_layer,
+                "gate_allow": gate_allow,
+                "gate_status": gate_status,
+                "gate_reason": gate_reason,
                 "old_price": old_price,
                 "new_price": new_price,
                 "post_save_price": post_save_price,

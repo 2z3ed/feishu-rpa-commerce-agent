@@ -50,14 +50,19 @@ def _evaluate_adjust_inventory_gate(slots: dict) -> tuple[bool, str]:
     """Return (allow, reason) for the minimal gate entry."""
     sku = str(slots.get("sku") or "").strip().upper()
     delta_raw = slots.get("delta")
+    target_inventory_raw = slots.get("target_inventory")
     try:
         delta = int(delta_raw)
     except Exception:
         delta = 0
+    try:
+        target_inventory = int(target_inventory_raw)
+    except Exception:
+        target_inventory = 0
     if not sku:
         return False, "sku_required"
-    if delta == 0:
-        return False, "delta_required"
+    if delta == 0 and target_inventory == 0:
+        return False, "delta_or_target_inventory_required"
     return True, "allow"
 
 
