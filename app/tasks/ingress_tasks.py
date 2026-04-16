@@ -157,6 +157,10 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         target_task_id = pr.get("target_task_id", "")
         original_update_task_id = pr.get("original_update_task_id", "")
         confirm_task_id = pr.get("confirm_task_id", "")
+        rpa_vendor = pr.get("rpa_vendor", "")
+        raw_result_path = pr.get("raw_result_path", "")
+        evidence_paths = pr.get("evidence_paths", [])
+        evidence_paths_count = len(evidence_paths) if isinstance(evidence_paths, list) else 0
         log_step(task_id, "intent_resolved", "success", f"intent={intent_code}")
         detail = build_action_executed_detail(
             {
@@ -205,6 +209,9 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "target_task_id": target_task_id,
                 "original_update_task_id": original_update_task_id,
                 "confirm_task_id": confirm_task_id,
+                "rpa_vendor": rpa_vendor,
+                "raw_result_path": raw_result_path,
+                "evidence_paths_count": evidence_paths_count,
             }
         )
         log_step(

@@ -170,6 +170,18 @@ class Settings(BaseSettings):
     RPA_REAL_ADMIN_READINESS_HTTP_PROBE: bool = False
     RPA_REAL_ADMIN_READINESS_PROBE_TIMEOUT_S: int = 5
 
+    # P7.0 PoC — local Yingdao bridge (no console/API dependency).
+    # Allowed: internal_sandbox | yingdao_bridge
+    ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND: str = "internal_sandbox"
+    YINGDAO_BRIDGE_BASE_URL: str = "http://127.0.0.1:17891"
+    YINGDAO_BRIDGE_TIMEOUT_S: int = 30
+    YINGDAO_BRIDGE_ENVIRONMENT: str = "local_poc"
+    # Local bridge file exchange dirs (bridge service side defaults).
+    YINGDAO_BRIDGE_INPUT_DIR: str = "tmp/yingdao_bridge/inbox"
+    YINGDAO_BRIDGE_OUTPUT_DIR: str = "tmp/yingdao_bridge/outbox"
+    YINGDAO_BRIDGE_WAIT_TIMEOUT_S: int = 20
+    YINGDAO_BRIDGE_POLL_INTERVAL_MS: int = 200
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

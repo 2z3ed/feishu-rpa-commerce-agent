@@ -11,6 +11,32 @@ from app.graph.nodes.finalize_result import finalize_result
 from app.core.config import settings
 
 
+def _assert_adjust_governance_fields_stable(out: dict):
+    required = {
+        "provider_id",
+        "capability",
+        "execution_mode",
+        "confirm_backend",
+        "operation_result",
+        "verify_passed",
+        "verify_reason",
+        "failure_layer",
+        "target_task_id",
+        "confirm_task_id",
+        "original_update_task_id",
+        "readiness_status",
+        "endpoint_profile",
+        "session_injection_mode",
+    }
+    for k in required:
+        assert k in out
+    assert out["provider_id"] == "odoo"
+    assert out["capability"] == "warehouse.adjust_inventory"
+    assert str(out["execution_mode"] or "") in {"api", "mock"}
+    assert str(out["target_task_id"] or "").startswith("TASK-P61-ORIG")
+    assert str(out["confirm_task_id"] or "").startswith("TASK-P61-CFM")
+
+
 def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkeypatch):
     # Keep this test self-contained when optional deps are unavailable.
     fake_lark = types.ModuleType("lark_oapi")
@@ -98,6 +124,7 @@ def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkey
         }
         out_c1 = execute_action(st_c1)
         assert out_c1["status"] in {"succeeded", "failed"}
+        _assert_adjust_governance_fields_stable(out_c1)
         pr = out_c1.get("parsed_result") or {}
         assert pr.get("target_task_id") == orig_task_id
         assert pr.get("confirm_task_id") == confirm_task_id_1
@@ -125,6 +152,7 @@ def test_p61_adjust_inventory_requires_confirmation_and_confirm_is_unique(monkey
         }
         out_c2 = execute_action(st_c2)
         assert out_c2["status"] == "failed"
+        _assert_adjust_governance_fields_stable(out_c2)
         pr2 = out_c2.get("parsed_result") or {}
         assert pr2.get("failure_layer") == "confirm_target_already_consumed"
         assert pr2.get("operation_result") == "confirm_blocked_noop"
@@ -318,6 +346,7 @@ def test_p61_confirm_fails_when_risk_context_missing_keys(monkeypatch):
             }
         )
         assert out["status"] == "failed"
+        _assert_adjust_governance_fields_stable(out)
         pr = out.get("parsed_result") or {}
         assert pr.get("failure_layer") == "confirm_context_incomplete"
         assert pr.get("operation_result") == "confirm_blocked_noop"
@@ -330,4 +359,159 @@ def test_p61_confirm_fails_when_risk_context_missing_keys(monkeypatch):
         finalize_result(out)
     finally:
         settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p61_confirm_verify_failed_is_deterministic(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        orig_task_id = "TASK-P61-ORIG-VFAIL"
+        confirm_task_id = "TASK-P61-CFM-VFAIL"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        # Deterministic verify-failed sample: force verify failure with a stable flag.
+        db.add(
+            TaskStep(
+                id="step-vfail-ctx",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail='{"provider_id":"odoo","capability":"warehouse.adjust_inventory","sku":"A001","old_inventory":100,"delta":5,"target_inventory":105,"force_verify_fail":true}',
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "failed"
+        _assert_adjust_governance_fields_stable(out)
+        pr = out.get("parsed_result") or {}
+        assert pr.get("operation_result") == "write_adjust_inventory_verify_failed"
+        assert pr.get("failure_layer") == "verify_failed"
+        assert pr.get("verify_passed") is False
+        assert "forced_verify_failure" in str(pr.get("verify_reason") or "")
+        assert out.get("operation_result") == "write_adjust_inventory_verify_failed"
+        assert out.get("failure_layer") == "verify_failed"
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p70_confirm_adjust_inventory_can_use_yingdao_bridge(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_backend = settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND
+        settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = "yingdao_bridge"
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        def _fake_bridge_run(payload):
+            return {
+                "task_id": payload["task_id"],
+                "confirm_task_id": payload["confirm_task_id"],
+                "provider_id": payload["provider_id"],
+                "capability": payload["capability"],
+                "rpa_vendor": "yingdao",
+                "operation_result": "write_adjust_inventory",
+                "verify_passed": True,
+                "verify_reason": "ok",
+                "failure_layer": "",
+                "status": "done",
+                "raw_result_path": "/tmp/yingdao/result.json",
+                "evidence_paths": ["/tmp/yingdao/shot.png"],
+            }
+
+        monkeypatch.setattr(execute_action_mod, "run_yingdao_adjust_inventory", _fake_bridge_run)
+
+        orig_task_id = "TASK-P70-ORIG-1"
+        confirm_task_id = "TASK-P70-CFM-1"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        db.add(
+            TaskStep(
+                id="step-p70-ctx",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail='{"provider_id":"odoo","capability":"warehouse.adjust_inventory","sku":"A001","old_inventory":100,"delta":5,"target_inventory":105}',
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "succeeded"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("confirm_backend") == "yingdao_bridge"
+        assert pr.get("rpa_vendor") == "yingdao"
+        assert pr.get("raw_result_path") == "/tmp/yingdao/result.json"
+        assert pr.get("operation_result") == "write_adjust_inventory"
+    finally:
+        settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = old_backend
         db.close()

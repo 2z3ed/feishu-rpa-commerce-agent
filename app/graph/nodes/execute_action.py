@@ -27,6 +27,7 @@ from app.rpa.confirm_update_price import (
     run_confirm_update_price_rpa,
 )
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
+from app.rpa.yingdao_runner import run_yingdao_adjust_inventory
 from app.utils.task_logger import log_step
 
 
@@ -43,6 +44,40 @@ def _extract_confirm_failure_layer(result: dict) -> str:
 def _strip_error_prefix(raw: str) -> str:
     text = (raw or "").strip()
     return re.sub(r"^\[[^\]]+\]\s*", "", text).strip()
+
+
+def _apply_adjust_inventory_governance_baseline(state: dict, result: dict | None = None) -> None:
+    """Keep adjust_inventory governance fields stable across success/blocked/verify-failed paths."""
+    result = result if isinstance(result, dict) else {}
+    pr = result.get("parsed_result")
+    if not isinstance(pr, dict):
+        pr = state.get("parsed_result") if isinstance(state.get("parsed_result"), dict) else {}
+
+    state["provider_id"] = str(result.get("provider_id") or "odoo")
+    state["capability"] = str(result.get("capability") or "warehouse.adjust_inventory")
+    state["platform"] = str(result.get("platform") or "odoo")
+    state["confirm_backend"] = str(result.get("confirm_backend") or pr.get("confirm_backend") or state.get("confirm_backend") or "none")
+    state["operation_result"] = str(result.get("operation_result") or pr.get("operation_result") or state.get("operation_result") or "")
+    state["verify_passed"] = (
+        result["verify_passed"]
+        if "verify_passed" in result
+        else pr.get("verify_passed", state.get("verify_passed"))
+    )
+    state["verify_reason"] = str(result.get("verify_reason") or pr.get("verify_reason") or state.get("verify_reason") or "")
+    state["failure_layer"] = str(pr.get("failure_layer") or result.get("failure_layer") or state.get("failure_layer") or "")
+    state["target_task_id"] = str(pr.get("target_task_id") or result.get("target_task_id") or state.get("target_task_id") or "")
+    state["original_update_task_id"] = str(
+        pr.get("original_update_task_id") or result.get("original_update_task_id") or state.get("original_update_task_id") or ""
+    )
+    state["confirm_task_id"] = str(pr.get("confirm_task_id") or result.get("confirm_task_id") or state.get("confirm_task_id") or "")
+
+    # Keep these observable fields deterministic on adjust_inventory confirm path.
+    state["readiness_status"] = str(state.get("readiness_status") or "ready")
+    state["endpoint_profile"] = str(state.get("endpoint_profile") or "odoo_product_stock_v1")
+    state["session_injection_mode"] = str(state.get("session_injection_mode") or "header")
+    state["execution_backend"] = str(state.get("execution_backend") or "internal_sandbox")
+    state["selected_backend"] = str(state.get("selected_backend") or "internal_sandbox")
+    state["final_backend"] = str(state.get("final_backend") or "internal_sandbox")
 
 
 def execute_action(state: dict) -> dict:
@@ -342,6 +377,8 @@ def execute_action(state: dict) -> dict:
                     state["original_update_task_id"] = state["parsed_result"].get("original_update_task_id", "")
                     state["confirm_task_id"] = state["parsed_result"].get("confirm_task_id", "")
                     state["operation_result"] = str(state["parsed_result"].get("operation_result") or state.get("operation_result") or "")
+                if state.get("capability") == "warehouse.adjust_inventory":
+                    _apply_adjust_inventory_governance_baseline(state, result)
                 state["response_mapper"] = "none"
                 state["request_adapter"] = "none"
                 state["auth_profile"] = "none"
@@ -369,10 +406,18 @@ def execute_action(state: dict) -> dict:
                     state["target_task_id"] = state["parsed_result"].get("target_task_id", "")
                     state["original_update_task_id"] = state["parsed_result"].get("original_update_task_id", "")
                     state["confirm_task_id"] = state["parsed_result"].get("confirm_task_id", "")
+                    state["operation_result"] = str(state["parsed_result"].get("operation_result") or state.get("operation_result") or "")
+                    state["verify_passed"] = state["parsed_result"].get("verify_passed", state.get("verify_passed"))
+                    state["verify_reason"] = str(state["parsed_result"].get("verify_reason") or state.get("verify_reason") or "")
                 display_err = _strip_error_prefix(err_msg)
                 state["error_message"] = f"[{failure_layer}] {display_err}" if display_err else f"[{failure_layer}]"
                 state["status"] = "failed"
                 state["result_summary"] = f"确认失败：{state['error_message']}"
+                if state.get("capability") == "warehouse.adjust_inventory" or (
+                    isinstance(state.get("parsed_result"), dict)
+                    and state["parsed_result"].get("target_task_id")
+                ):
+                    _apply_adjust_inventory_governance_baseline(state, result)
                 if rpa_meta_fail:
                     state["execution_mode"] = rpa_meta_fail.get("execution_mode", "rpa")
                     state["execution_backend"] = rpa_meta_fail.get("execution_backend", "rpa_local_fake")
@@ -1129,21 +1174,39 @@ def _confirm_execute_odoo_adjust_inventory(
             },
         }
 
+    confirm_exec_backend = str(
+        settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND or "internal_sandbox"
+    ).strip().lower()
+
     log_step(
         current_task_id,
         "controlled_write_started",
         "processing",
-        f"provider_id={provider_id} capability=warehouse.adjust_inventory target_task_id={target_task_id} sku={sku} delta={delta}",
+        f"provider_id={provider_id} capability=warehouse.adjust_inventory target_task_id={target_task_id} sku={sku} delta={delta} backend={confirm_exec_backend}",
     )
 
-    with TestClient(_build_minimal_internal_sandbox_app()) as client:
-        resp = client.post(
-            "/api/v1/internal/sandbox/provider/odoo/inventory/adjust",
-            params={"sku": sku, "delta": delta},
-        )
-        if resp.status_code != 200:
-            layer = "provider_upstream_unavailable"
-            msg = f"sandbox_adjust_failed status={resp.status_code} body={(resp.text or '')[:200]}"
+    rpa_vendor = ""
+    raw_result_path = ""
+    evidence_paths: list[str] = []
+
+    if confirm_exec_backend == "yingdao_bridge":
+        bridge_payload = {
+            "task_id": target_task_id,
+            "confirm_task_id": current_task_id,
+            "provider_id": provider_id,
+            "capability": "warehouse.adjust_inventory",
+            "sku": sku,
+            "delta": delta,
+            "old_inventory": old_inv,
+            "target_inventory": target_inv,
+            "environment": str(settings.YINGDAO_BRIDGE_ENVIRONMENT or "local_poc"),
+            "force_verify_fail": bool(ctx.get("force_verify_fail", False)),
+        }
+        try:
+            bridge_out = run_yingdao_adjust_inventory(bridge_payload)
+        except Exception as exc:
+            layer = "bridge_unavailable"
+            msg = f"yingdao_bridge_call_failed:{exc}"
             log_step(current_task_id, "controlled_write_failed", "failed", msg[:900])
             return {
                 "error": f"[{layer}] {msg}",
@@ -1163,15 +1226,69 @@ def _confirm_execute_odoo_adjust_inventory(
                     "target_task_id": target_task_id,
                     "original_update_task_id": target_task_id,
                     "confirm_task_id": current_task_id or None,
+                    "confirm_backend": "yingdao_bridge",
+                    "rpa_vendor": "yingdao",
+                    "raw_result_path": "",
+                    "evidence_paths": [],
                 },
             }
+        rpa_vendor = str(bridge_out.get("rpa_vendor") or "yingdao")
+        raw_result_path = str(bridge_out.get("raw_result_path") or "")
+        evidence_paths = [str(x) for x in (bridge_out.get("evidence_paths") or [])]
+        verify_passed = bool(bridge_out.get("verify_passed", False))
+        verify_reason = str(bridge_out.get("verify_reason") or "")
+        operation_result = str(bridge_out.get("operation_result") or "")
+        failure_layer = str(bridge_out.get("failure_layer") or "")
+        post_inv = int(bridge_out.get("post_inventory") or (target_inv if verify_passed else old_inv))
+    else:
+        with TestClient(_build_minimal_internal_sandbox_app()) as client:
+            resp = client.post(
+                "/api/v1/internal/sandbox/provider/odoo/inventory/adjust",
+                params={"sku": sku, "delta": delta},
+            )
+            if resp.status_code != 200:
+                layer = "provider_upstream_unavailable"
+                msg = f"sandbox_adjust_failed status={resp.status_code} body={(resp.text or '')[:200]}"
+                log_step(current_task_id, "controlled_write_failed", "failed", msg[:900])
+                return {
+                    "error": f"[{layer}] {msg}",
+                    "error_code": layer,
+                    "target_task_id": target_task_id,
+                    "original_update_task_id": target_task_id,
+                    "confirm_task_id": current_task_id or None,
+                    "parsed_result": {
+                        "failure_layer": layer,
+                        "operation_result": "write_adjust_inventory_failed",
+                        "verify_passed": False,
+                        "verify_reason": msg,
+                        "old_inventory": old_inv,
+                        "delta": delta,
+                        "target_inventory": target_inv,
+                        "post_inventory": None,
+                        "target_task_id": target_task_id,
+                        "original_update_task_id": target_task_id,
+                        "confirm_task_id": current_task_id or None,
+                    },
+                }
 
-    # Post-check via existing readonly client path (internal sandbox).
-    post = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
-    post_inv = int(post.get("inventory") or 0)
-    verify_passed = bool(post_inv == target_inv)
-    verify_reason = "ok" if verify_passed else f"post_inventory_mismatch expected={target_inv} got={post_inv}"
-    operation_result = "write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"
+    if confirm_exec_backend != "yingdao_bridge":
+        # Post-check via existing readonly client path (internal sandbox).
+        post = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
+        post_inv = int(post.get("inventory") or 0)
+        force_verify_fail = bool(ctx.get("force_verify_fail", False))
+        verify_passed = bool(post_inv == target_inv) and (not force_verify_fail)
+        verify_reason = "ok" if verify_passed else f"post_inventory_mismatch expected={target_inv} got={post_inv}"
+        if force_verify_fail:
+            verify_reason = f"forced_verify_failure expected={target_inv} got={post_inv}"
+        operation_result = "write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"
+        failure_layer = "" if verify_passed else "verify_failed"
+    else:
+        if not operation_result:
+            operation_result = "write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"
+        if not verify_reason:
+            verify_reason = "ok" if verify_passed else "bridge_verify_failed"
+        if (not failure_layer) and (not verify_passed):
+            failure_layer = "verify_failed"
 
     # Update original target task record as single source of truth for business action outcome.
     # Use an explicit UPDATE to avoid session identity-map surprises in shared-session tests.
@@ -1199,6 +1316,9 @@ def _confirm_execute_odoo_adjust_inventory(
         "provider_id": provider_id,
         "capability": "warehouse.adjust_inventory",
         "confirm_backend": "internal_sandbox",
+        "rpa_vendor": rpa_vendor,
+        "raw_result_path": raw_result_path,
+        "evidence_paths": evidence_paths,
         "sku": sku,
         "old_inventory": old_inv,
         "delta": delta,
@@ -1207,11 +1327,12 @@ def _confirm_execute_odoo_adjust_inventory(
         "verify_passed": verify_passed,
         "verify_reason": verify_reason,
         "operation_result": operation_result,
-        "failure_layer": "" if verify_passed else "verify_failed",
+        "failure_layer": failure_layer,
         "target_task_id": target_task_id,
         "original_update_task_id": target_task_id,
         "confirm_task_id": current_task_id or None,
     }
+    result["confirm_backend"] = "yingdao_bridge" if confirm_exec_backend == "yingdao_bridge" else "internal_sandbox"
     result["parsed_result"] = {
         "failure_layer": result["failure_layer"],
         "operation_result": operation_result,
@@ -1224,7 +1345,10 @@ def _confirm_execute_odoo_adjust_inventory(
         "target_task_id": target_task_id,
         "original_update_task_id": target_task_id,
         "confirm_task_id": current_task_id or None,
-        "confirm_backend": "internal_sandbox",
+        "confirm_backend": result["confirm_backend"],
+        "rpa_vendor": rpa_vendor,
+        "raw_result_path": raw_result_path,
+        "evidence_paths": evidence_paths,
     }
     return result
 
