@@ -15,6 +15,7 @@ _VALID_FAILURE = frozenset({"none", "sku_missing", "save_error", "save_disabled"
 _VALID_LIST_DETAIL_FAILURE = frozenset(
     {"none", "sku_missing_in_list", "detail_page_not_found", "save_button_disabled", "save_error"}
 )
+_VALID_INVENTORY_FAILURE = frozenset({"none", "element_missing", "page_timeout"})
 
 
 def _norm_failure_mode(raw: str) -> str:
@@ -25,6 +26,10 @@ def _norm_failure_mode(raw: str) -> str:
 def _norm_list_detail_failure_mode(raw: str) -> str:
     v = (raw or "none").lower().strip()
     return v if v in _VALID_LIST_DETAIL_FAILURE else "none"
+
+def _norm_inventory_failure_mode(raw: str) -> str:
+    v = (raw or "none").lower().strip()
+    return v if v in _VALID_INVENTORY_FAILURE else "none"
 
 
 @router.get("", include_in_schema=False, response_class=HTMLResponse)
@@ -49,6 +54,18 @@ def admin_like_hub(
     q_catalog = urlencode({**base_q, "failure_mode": _norm_list_detail_failure_mode(failure_mode)})
     next_path = f"/api/v1/internal/rpa-sandbox/admin-like/update-price?{q_update}"
     catalog_path = f"/api/v1/internal/rpa-sandbox/admin-like/catalog?{q_catalog}"
+    # Inventory adjust uses its own failure modes (element_missing/page_timeout); keep it separate.
+    inv_q = urlencode(
+        {
+            "sku": sku_u,
+            "old_inventory": 100,
+            "delta": 5,
+            "target_inventory": 105,
+            "failure_mode": _norm_inventory_failure_mode(failure_mode),
+        }
+    )
+    inv_dash = "/api/v1/internal/rpa-sandbox/admin-like/inventory"
+    inv_adjust = f"/api/v1/internal/rpa-sandbox/admin-like/inventory/adjust?{inv_q}"
 
     page = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -87,6 +104,8 @@ def admin_like_hub(
       <span style="padding:0 16px;font-size:12px;color:#999;">目录</span>
       <a href="{html.escape(catalog_path)}" data-testid="nav-to-catalog">商品 · 目录</a>
       <a href="{html.escape(next_path)}" data-testid="nav-to-update-price">商品 · 改价（工作台）</a>
+      <a href="{html.escape(inv_dash)}" data-testid="nav-to-inventory-dash">库存 · 概览</a>
+      <a href="{html.escape(inv_adjust)}" data-testid="nav-to-inventory-adjust">库存 · 调整（工作台）</a>
     </aside>
     <main class="content">
       <div class="card">
@@ -96,6 +115,282 @@ def admin_like_hub(
       </div>
     </main>
   </div>
+</body>
+</html>"""
+    return HTMLResponse(content=page)
+
+
+@router.get("/inventory", include_in_schema=False, response_class=HTMLResponse)
+def inventory_dashboard_page(
+    tenant: str = Query(default="sandbox"),
+    role: str = Query(default="warehouse_operator"),
+):
+    """Inventory dashboard entry (dev only; not production)."""
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+    ten = html.escape((tenant or "sandbox").strip()[:32])
+    rl = html.escape((role or "warehouse_operator").strip()[:32])
+    page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Commerce 后台 · 库存概览</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; color: #1f1f1f; }}
+    .topbar {{ height: 48px; background: #001529; color: #fff; display:flex; align-items:center; padding:0 16px; font-weight:600; }}
+    .layout {{ display:flex; min-height: calc(100vh - 48px); }}
+    .sider {{ width: 220px; background:#fff; border-right:1px solid #e8e8e8; padding: 12px 0; }}
+    .sider a {{ display:block; padding:10px 16px; color:#333; text-decoration:none; font-size:14px; }}
+    .sider a:hover {{ background:#f5f5f5; }}
+    .content {{ flex:1; padding:24px; }}
+    .card {{ background:#fff; border-radius:8px; padding:20px; max-width:720px; box-shadow:0 1px 2px rgba(0,0,0,.06); }}
+    .meta {{ color:#888; font-size:13px; margin: 8px 0 0; }}
+    .badge {{ display:inline-block; padding:2px 8px; border-radius:999px; background:#fff1b8; color:#614700; font-size:12px; margin-left:8px; }}
+  </style>
+</head>
+<body data-testid="inventory-dashboard-root" data-tenant="{ten}" data-role="{rl}">
+  <header class="topbar" data-testid="inventory-topbar">
+    Commerce 后台 · 库存中心 <span class="badge" data-testid="nonprod-badge">SANDBOX / 非生产</span>
+  </header>
+  <div class="layout">
+    <aside class="sider" data-testid="inventory-sider">
+      <span style="padding:0 16px;font-size:12px;color:#999;">库存中心</span>
+      <a href="/api/v1/internal/rpa-sandbox/admin-like/inventory" data-testid="nav-inv-home">概览</a>
+      <a href="/api/v1/internal/rpa-sandbox/admin-like/inventory/adjust" data-testid="nav-inv-adjust">库存调整</a>
+    </aside>
+    <main class="content">
+      <div class="card">
+        <h1 style="margin:0 0 8px;font-size:18px;">库存概览</h1>
+        <p class="meta">租户：<strong data-testid="tenant">{ten}</strong>，角色：<strong data-testid="role">{rl}</strong></p>
+        <p class="meta">此页面仅用于 RPA 受控验证，不代表真实生产后台。</p>
+      </div>
+    </main>
+  </div>
+</body>
+</html>"""
+    return HTMLResponse(content=page)
+
+
+@router.get("/inventory/adjust", include_in_schema=False, response_class=HTMLResponse)
+def inventory_adjust_page(
+    sku: str = Query(default="A001"),
+    old_inventory: int = Query(default=100),
+    delta: int = Query(default=5),
+    target_inventory: int = Query(default=105),
+    failure_mode: str = Query(default="none"),
+):
+    """Inventory adjust workbench: list search -> drawer edit -> submit -> result."""
+    if not settings.ENABLE_INTERNAL_SANDBOX_API:
+        raise HTTPException(status_code=503, detail="internal sandbox api disabled")
+    fm = _norm_inventory_failure_mode(failure_mode)
+    sku_u = sku.strip().upper()[:64]
+    sku_e = html.escape(sku_u)
+    oi = int(old_inventory)
+    d = int(delta)
+    ti = int(target_inventory)
+    # Controlled knobs:
+    # - element_missing: drawer will never render
+    # - page_timeout: result never becomes visible
+    drawer_visible = "0" if fm == "element_missing" else "0"
+    page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>库存调整 · 工作台</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; color: #1f1f1f; }}
+    .topbar {{ height: 48px; background: #001529; color: #fff; display:flex; align-items:center; padding:0 16px; font-weight:600; }}
+    .layout {{ display:flex; min-height: calc(100vh - 48px); }}
+    .sider {{ width: 220px; background:#fff; border-right:1px solid #e8e8e8; padding: 12px 0; }}
+    .sider a {{ display:block; padding:10px 16px; color:#333; text-decoration:none; font-size:14px; }}
+    .sider a:hover {{ background:#f5f5f5; }}
+    .content {{ flex:1; padding:20px 24px; max-width: 1100px; }}
+    .breadcrumb {{ font-size: 12px; color: #8c8c8c; margin-bottom: 12px; }}
+    .panel {{ background:#fff; border-radius:8px; padding:16px 20px; box-shadow:0 1px 2px rgba(0,0,0,.06); }}
+    .row {{ display:flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }}
+    label {{ display:block; font-size: 13px; color:#595959; margin: 6px 0 4px; }}
+    input[type=text], input[type=number] {{ padding: 8px 10px; border:1px solid #d9d9d9; border-radius:4px; min-width: 240px; }}
+    button.btn {{ padding: 8px 16px; background:#1677ff; color:#fff; border:none; border-radius:4px; cursor:pointer; }}
+    button.btn:disabled {{ background:#bfbfbf; cursor:not-allowed; }}
+    table {{ width:100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }}
+    th, td {{ border:1px solid #f0f0f0; padding: 10px 12px; text-align:left; }}
+    th {{ background:#fafafa; }}
+    .muted {{ color:#8c8c8c; font-size: 13px; }}
+    #toast {{ position: fixed; top: 64px; right: 24px; min-width: 220px; display:none; padding: 10px 12px; border-radius: 6px; border: 1px solid #d9d9d9; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,.08); }}
+    #toast[data-visible="1"] {{ display:block; }}
+    #toast[data-status="success"] {{ border-color:#52c41a; }}
+    #toast[data-status="error"] {{ border-color:#ff7875; }}
+    #result {{ margin-top: 12px; padding: 12px; border:1px solid #d9d9d9; border-radius: 6px; min-height: 44px; }}
+    #result[data-status="success"] {{ border-color:#52c41a; background:#f6ffed; }}
+    #result[data-status="error"] {{ border-color:#ff7875; background:#fff2f0; }}
+    /* Drawer */
+    #drawer {{ position: fixed; top:0; right:0; width: 420px; height: 100vh; background:#fff; border-left: 1px solid #e8e8e8; box-shadow:-2px 0 12px rgba(0,0,0,.08); display:none; padding: 16px 16px 24px; }}
+    #drawer[data-visible="1"] {{ display:block; }}
+    .drawer-head {{ display:flex; justify-content: space-between; align-items:center; margin-bottom: 8px; }}
+    .drawer-title {{ font-size: 16px; font-weight: 600; }}
+    .drawer-close {{ border:none; background:transparent; font-size: 18px; cursor:pointer; }}
+    .kv {{ margin-top: 10px; font-size: 14px; }}
+    .kv strong {{ display:inline-block; width: 120px; color:#595959; }}
+  </style>
+</head>
+<body
+  data-testid="inventory-adjust-root"
+  data-session-sku="{sku_e}"
+  data-old-inventory="{oi}"
+  data-failure-mode="{html.escape(fm)}"
+>
+  <header class="topbar" data-testid="inventory-topbar">
+    Commerce 后台 · 库存中心 <span style="margin-left:8px;font-size:12px;color:#fff;opacity:.85;">SANDBOX</span>
+  </header>
+  <div class="layout">
+    <aside class="sider" data-testid="inventory-sider">
+      <span style="padding:0 16px;font-size:12px;color:#999;">库存中心</span>
+      <a href="/api/v1/internal/rpa-sandbox/admin-like/inventory" data-testid="nav-inv-home">概览</a>
+      <a href="/api/v1/internal/rpa-sandbox/admin-like/inventory/adjust" data-testid="nav-inv-adjust">库存调整</a>
+    </aside>
+    <main class="content">
+      <div class="breadcrumb" data-testid="inventory-breadcrumb">首页 / 库存中心 / 库存调整</div>
+      <div class="panel">
+        <h1 style="margin:0 0 8px;font-size:18px;">库存调整（工作台）</h1>
+        <p class="muted" data-testid="inventory-hint">受控页面：用于验证页面导航、列表检索、抽屉编辑与提交回显（非生产）</p>
+        <div class="row" data-testid="inventory-search-row">
+          <div>
+            <label for="sku-search">SKU</label>
+            <input type="text" id="sku-search" data-testid="inv-sku-search" value="{sku_e}" autocomplete="off"/>
+          </div>
+          <div>
+            <label for="warehouse">仓库</label>
+            <input type="text" id="warehouse" data-testid="inv-warehouse" value="MAIN" readonly/>
+          </div>
+          <div>
+            <button type="button" class="btn" id="search-btn" data-testid="inv-search-btn">查询</button>
+          </div>
+        </div>
+        <div id="list-empty" data-testid="inv-list-empty" style="display:none;margin-top:12px;color:#a8071a;">未找到匹配 SKU</div>
+        <div id="list-wrap" data-testid="inv-list-wrap" style="display:none;">
+          <table data-testid="inv-table">
+            <thead><tr><th>SKU</th><th>写前库存</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr data-testid="inv-row" data-sku="{sku_e}">
+                <td>{sku_e}</td>
+                <td data-testid="inv-old">{oi}</td>
+                <td><button type="button" class="btn" id="open-drawer" data-testid="inv-open-drawer">调整</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="result" data-testid="inv-result" data-status="">操作结果将显示在此处</div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" data-testid="inv-toast" data-visible="0" data-status="">
+    <strong data-testid="inv-toast-title">提示</strong>
+    <div data-testid="inv-toast-msg">-</div>
+  </div>
+
+  <div id="drawer" data-testid="inventory-adjust-drawer" data-visible="{drawer_visible}">
+    <div class="drawer-head">
+      <div class="drawer-title" data-testid="inv-drawer-title">调整库存</div>
+      <button class="drawer-close" type="button" id="drawer-close" aria-label="close">×</button>
+    </div>
+    <div class="kv"><strong>SKU</strong><span data-testid="inv-drawer-sku">{sku_e}</span></div>
+    <div class="kv"><strong>写前库存</strong><span data-testid="inv-drawer-old">{oi}</span></div>
+    <div class="row" style="margin-top: 10px;">
+      <div>
+        <label for="delta">delta</label>
+        <input type="number" id="delta" data-testid="inv-delta" value="{d}"/>
+      </div>
+      <div>
+        <label for="target">target_inventory</label>
+        <input type="number" id="target" data-testid="inv-target" value="{ti}"/>
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <button type="button" class="btn" id="submit-btn" data-testid="inv-submit-btn">提交调整</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {{
+      var mode = document.body.getAttribute("data-failure-mode") || "none";
+      var sessionSku = (document.body.getAttribute("data-session-sku") || "").trim().toUpperCase();
+      var oldInv = parseInt(document.body.getAttribute("data-old-inventory") || "0", 10);
+      var searchBtn = document.getElementById("search-btn");
+      var skuInput = document.getElementById("sku-search");
+      var listWrap = document.getElementById("list-wrap");
+      var empty = document.getElementById("list-empty");
+      var openDrawerBtn = document.getElementById("open-drawer");
+      var drawer = document.getElementById("drawer");
+      var closeBtn = document.getElementById("drawer-close");
+      var deltaEl = document.getElementById("delta");
+      var targetEl = document.getElementById("target");
+      var submitBtn = document.getElementById("submit-btn");
+      var result = document.getElementById("result");
+      var toast = document.getElementById("toast");
+      var toastMsg = document.querySelector("[data-testid=inv-toast-msg]");
+
+      function showToast(st, msg) {{
+        toast.setAttribute("data-visible", "1");
+        toast.setAttribute("data-status", st || "");
+        toastMsg.textContent = msg || "";
+        setTimeout(function () {{ toast.setAttribute("data-visible","0"); }}, 1200);
+      }}
+
+      searchBtn.addEventListener("click", function () {{
+        var q = (skuInput.value || "").trim().toUpperCase();
+        empty.style.display = "none";
+        listWrap.style.display = "none";
+        if (q !== sessionSku) {{
+          empty.style.display = "block";
+          empty.textContent = "未找到匹配 SKU（受控校验：sku mismatch）";
+          return;
+        }}
+        listWrap.style.display = "block";
+        showToast("success", "已命中 SKU: " + q);
+      }});
+
+      if (closeBtn) {{
+        closeBtn.addEventListener("click", function () {{
+          drawer.setAttribute("data-visible", "0");
+        }});
+      }}
+
+      if (openDrawerBtn) {{
+        openDrawerBtn.addEventListener("click", function () {{
+          if (mode === "element_missing") {{
+            // Simulate drawer missing by never making it visible.
+            showToast("error", "抽屉组件缺失（受控失败：element_missing）");
+            return;
+          }}
+          drawer.setAttribute("data-visible", "1");
+        }});
+      }}
+
+      if (submitBtn) {{
+        submitBtn.addEventListener("click", function () {{
+          var d = parseInt(deltaEl.value || "0", 10);
+          var t = parseInt(targetEl.value || "0", 10);
+          var newInv = isNaN(t) || t === 0 ? (oldInv + d) : t;
+          if (mode === "page_timeout") {{
+            // Simulate never returning any result.
+            showToast("error", "页面无响应（受控失败：page_timeout）");
+            return;
+          }}
+          result.setAttribute("data-status", "success");
+          result.setAttribute("data-old-inventory", String(oldInv));
+          result.setAttribute("data-new-inventory", String(newInv));
+          result.textContent = "提交成功：库存已更新（受控回显） new_inventory=" + newInv;
+          showToast("success", "提交成功");
+          drawer.setAttribute("data-visible", "0");
+        }});
+      }}
+    }})();
+  </script>
 </body>
 </html>"""
     return HTMLResponse(content=page)

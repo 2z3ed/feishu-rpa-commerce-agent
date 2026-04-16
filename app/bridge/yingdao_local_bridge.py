@@ -106,10 +106,15 @@ def _run_controlled_page_job(payload: dict[str, Any]) -> dict[str, Any]:
     target_inventory = int(payload.get("target_inventory") or max(0, old_inventory + delta))
     force_verify_fail = bool(payload.get("force_verify_fail", False))
     page_failure_mode = _normalize_page_failure_mode(payload.get("page_failure_mode"))
-    page_profile = str(payload.get("page_profile") or settings.YINGDAO_CONTROLLED_PAGE_PROFILE or "internal_inventory_adjust_v1")
+    page_profile = str(payload.get("page_profile") or settings.YINGDAO_CONTROLLED_PAGE_PROFILE or "internal_inventory_admin_like_v1")
     page_steps: list[str] = []
     base_url = _base_controlled_page_url()
-    page_url = f"{base_url}/api/v1/internal/rpa-sandbox/admin-like/catalog?{urlencode({'sku': sku})}"
+    # P72: more realistic admin-like inventory flow (still controlled / non-production).
+    page_url = f"{base_url}/api/v1/internal/rpa-sandbox/admin-like/inventory"
+    adjust_url = (
+        f"{base_url}/api/v1/internal/rpa-sandbox/admin-like/inventory/adjust?"
+        f"{urlencode({'sku': sku, 'old_inventory': old_inventory, 'delta': delta, 'target_inventory': target_inventory, 'failure_mode': page_failure_mode or 'none'})}"
+    )
 
     if page_failure_mode == "page_timeout":
         m = _PAGE_FAILURE_MAPPING["page_timeout"]
@@ -127,13 +132,13 @@ def _run_controlled_page_job(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence_paths": [],
             "page_url": page_url,
             "page_profile": page_profile,
-            "page_steps": ["open_page"],
+            "page_steps": ["open_dashboard"],
             "page_evidence_count": 0,
             "page_failure_code": "page_timeout",
         }
 
     # Step 1: open controlled page.
-    page_steps.append("open_page")
+    page_steps.append("open_dashboard")
     try:
         req = Request(page_url, method="GET")
         with urlopen(req, timeout=max(int(settings.YINGDAO_BRIDGE_TIMEOUT_S or 30), 1)) as resp:
@@ -143,8 +148,20 @@ def _run_controlled_page_job(payload: dict[str, Any]) -> dict[str, Any]:
     except (URLError, HTTPError) as exc:
         raise BridgeJobError(failure_layer="bridge_result_timeout", message=f"page_open_failed:{exc}") from exc
 
-    # Step 2: locate sku.
-    page_steps.append("locate_sku")
+    # Step 2: navigate to inventory adjust.
+    page_steps.append("navigate_inventory_adjust")
+    try:
+        req = Request(adjust_url, method="GET")
+        with urlopen(req, timeout=max(int(settings.YINGDAO_BRIDGE_TIMEOUT_S or 30), 1)) as resp:
+            _ = (resp.read() or b"").decode("utf-8", errors="ignore")
+    except (TimeoutError, socket.timeout) as exc:
+        raise BridgeJobError(failure_layer="bridge_result_timeout", message="page_adjust_open_timeout") from exc
+    except (URLError, HTTPError) as exc:
+        raise BridgeJobError(failure_layer="bridge_result_timeout", message=f"page_adjust_open_failed:{exc}") from exc
+
+    # Step 3: locate sku via list.
+    page_steps.append("search_sku")
+    page_steps.append("open_drawer")
     if page_failure_mode == "element_missing":
         return {
             "task_id": task_id,
@@ -165,7 +182,7 @@ def _run_controlled_page_job(payload: dict[str, Any]) -> dict[str, Any]:
             "page_failure_code": "element_missing",
         }
 
-    # Step 3/4: input + submit by calling internal sandbox adjust endpoint.
+    # Step 4/5: input + submit (semantic), then call internal sandbox adjust endpoint.
     page_steps.append("input_delta_target_inventory")
     page_steps.append("submit")
     adjust_url = f"{base_url}/api/v1/internal/sandbox/provider/odoo/inventory/adjust?{urlencode({'sku': sku, 'delta': delta})}"

@@ -156,7 +156,9 @@ def test_bridge_run_controlled_page_success(monkeypatch):
 
     def _fake_urlopen(req, timeout=30):  # noqa: ARG001
         url = req.full_url
-        if "admin-like/catalog" in url:
+        if "admin-like/inventory" in url:
+            return _Resp("<html>ok</html>")
+        if "admin-like/inventory/adjust" in url:
             return _Resp("<html>ok</html>")
         if "inventory/adjust" in url:
             return _Resp('{"provider":"odoo","payload":{"qty_after":105}}')
@@ -174,6 +176,7 @@ def test_bridge_run_controlled_page_success(monkeypatch):
                 "delta": 5,
                 "old_inventory": 100,
                 "target_inventory": 105,
+                "page_profile": "internal_inventory_admin_like_v1",
             }
         )
     finally:
@@ -181,8 +184,16 @@ def test_bridge_run_controlled_page_success(monkeypatch):
 
     assert out["operation_result"] == "write_adjust_inventory"
     assert out["verify_passed"] is True
-    assert out["page_profile"] == "internal_inventory_adjust_v1"
-    assert out["page_steps"] == ["open_page", "locate_sku", "input_delta_target_inventory", "submit", "read_page_echo"]
+    assert out["page_profile"] == "internal_inventory_admin_like_v1"
+    assert out["page_steps"] == [
+        "open_dashboard",
+        "navigate_inventory_adjust",
+        "search_sku",
+        "open_drawer",
+        "input_delta_target_inventory",
+        "submit",
+        "read_page_echo",
+    ]
 
 
 def test_bridge_run_controlled_page_element_missing(monkeypatch):
@@ -212,6 +223,7 @@ def test_bridge_run_controlled_page_element_missing(monkeypatch):
                 "old_inventory": 100,
                 "target_inventory": 105,
                 "page_failure_mode": "element_missing",
+                "page_profile": "internal_inventory_admin_like_v1",
             }
         )
     finally:
@@ -221,6 +233,7 @@ def test_bridge_run_controlled_page_element_missing(monkeypatch):
     assert out["failure_layer"] == "bridge_page_failed"
     assert out["verify_passed"] is False
     assert out["page_failure_code"] == "element_missing"
+    assert out["page_steps"] == ["open_dashboard", "navigate_inventory_adjust", "search_sku", "open_drawer"]
 
 
 def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
@@ -238,6 +251,7 @@ def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
                 "old_inventory": 100,
                 "target_inventory": 105,
                 "page_failure_mode": "page_timeout",
+                "page_profile": "internal_inventory_admin_like_v1",
             }
         )
     finally:
@@ -248,3 +262,4 @@ def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
     assert out["operation_result"] == "write_adjust_inventory_bridge_timeout"
     assert out["verify_passed"] is False
     assert out["verify_reason"] == "bridge_request_timeout"
+    assert out["page_steps"] == ["open_dashboard"]

@@ -169,7 +169,7 @@ def main() -> int:
     parser.add_argument("--old-inventory", type=int, default=100)
     parser.add_argument("--target-inventory", type=int, default=105)
     parser.add_argument("--environment", default="local_poc")
-    parser.add_argument("--page-profile", default="internal_inventory_adjust_v1")
+    parser.add_argument("--page-profile", default="internal_inventory_admin_like_v1")
     parser.add_argument("--page-failure-mode", choices=("", "page_timeout", "element_missing"), default="")
     parser.add_argument("--force-verify-fail", action="store_true")
     parser.add_argument("--print-expected-only", action="store_true")

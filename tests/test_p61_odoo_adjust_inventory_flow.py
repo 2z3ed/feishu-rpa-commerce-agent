@@ -467,9 +467,9 @@ def test_p70_confirm_adjust_inventory_can_use_yingdao_bridge(monkeypatch):
                 "status": "done",
                 "raw_result_path": "/tmp/yingdao/result.json",
                 "evidence_paths": ["/tmp/yingdao/shot.png"],
-                "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/catalog?sku=A001",
-                "page_profile": "internal_inventory_adjust_v1",
-                "page_steps": ["open_page", "locate_sku", "submit", "read_page_echo"],
+                "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/inventory",
+                "page_profile": "internal_inventory_admin_like_v1",
+                "page_steps": ["open_dashboard", "navigate_inventory_adjust", "search_sku", "open_drawer", "submit", "read_page_echo"],
                 "page_evidence_count": 1,
                 "page_failure_code": "",
             }
@@ -518,7 +518,7 @@ def test_p70_confirm_adjust_inventory_can_use_yingdao_bridge(monkeypatch):
         assert pr.get("rpa_vendor") == "yingdao"
         assert pr.get("raw_result_path") == "/tmp/yingdao/result.json"
         assert pr.get("operation_result") == "write_adjust_inventory"
-        assert pr.get("page_profile") == "internal_inventory_adjust_v1"
+        assert pr.get("page_profile") == "internal_inventory_admin_like_v1"
     finally:
         settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = old_backend
         db.close()

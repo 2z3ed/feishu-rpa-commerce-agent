@@ -28,9 +28,9 @@ def test_yingdao_runner_calls_bridge(monkeypatch):
                     "status": "done",
                     "raw_result_path": "/tmp/yingdao/result.json",
                     "evidence_paths": [],
-                    "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/catalog?sku=A001",
-                    "page_profile": "internal_inventory_adjust_v1",
-                    "page_steps": ["open_page", "locate_sku", "submit", "read_page_echo"],
+                    "page_url": "http://127.0.0.1:8000/api/v1/internal/rpa-sandbox/admin-like/inventory",
+                    "page_profile": "internal_inventory_admin_like_v1",
+                    "page_steps": ["open_dashboard", "navigate_inventory_adjust", "search_sku", "open_drawer", "submit", "read_page_echo"],
                     "page_evidence_count": 0,
                     "page_failure_code": "",
                 }
@@ -58,7 +58,7 @@ def test_yingdao_runner_calls_bridge(monkeypatch):
     )
     assert out["rpa_vendor"] == "yingdao"
     assert out["operation_result"] == "write_adjust_inventory"
-    assert out["page_profile"] == "internal_inventory_adjust_v1"
+    assert out["page_profile"] == "internal_inventory_admin_like_v1"
 
 
 def test_yingdao_runner_unreachable(monkeypatch):

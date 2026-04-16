@@ -14,7 +14,7 @@ def _args(**kwargs):
         "target_inventory": 105,
         "environment": "local_poc",
         "force_verify_fail": False,
-        "page_profile": "internal_inventory_adjust_v1",
+        "page_profile": "internal_inventory_admin_like_v1",
         "page_failure_mode": "",
     }
     base.update(kwargs)
@@ -72,8 +72,8 @@ def test_task_id_replay_report_structure(monkeypatch):
                 "raw_result_path": "",
                 "evidence_paths": [],
                 "page_url": "http://127.0.0.1:8000/x",
-                "page_profile": "internal_inventory_adjust_v1",
-                "page_steps": ["open_page"],
+                "page_profile": "internal_inventory_admin_like_v1",
+                "page_steps": ["open_dashboard"],
                 "page_evidence_count": 0,
                 "page_failure_code": "page_timeout",
             },
@@ -92,7 +92,7 @@ def test_task_id_replay_report_structure(monkeypatch):
         "target_inventory": 105,
         "environment": "local_poc",
         "force_verify_fail": False,
-        "page_profile": "internal_inventory_adjust_v1",
+        "page_profile": "internal_inventory_admin_like_v1",
         "page_failure_mode": "page_timeout",
     }
     report = rehearsal.build_task_id_replay_report(task_id="TASK-P71-REPLAY-1", base_url="http://127.0.0.1:17891", payload=payload)
@@ -100,5 +100,6 @@ def test_task_id_replay_report_structure(monkeypatch):
     assert report["task_id"] == "TASK-P71-REPLAY-1"
     assert "actual" in report
     assert report["actual"]["page_failure_code"] == "page_timeout"
+    assert report["actual"]["page_profile"] == "internal_inventory_admin_like_v1"
     assert "steps_checklist" in report
     assert "page_failure_code" in report["steps_checklist"]
