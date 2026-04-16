@@ -104,6 +104,60 @@ def _governance_alignment(result: dict) -> dict:
     return {"sample_bucket": "unclassified", "p62_view": "manual_review"}
 
 
+def build_task_id_replay_report(*, task_id: str, base_url: str, payload: dict) -> dict:
+    """Minimal single-sample replay report for manual verification.
+
+    This does NOT read DB or /steps. It prints a deterministic structure that humans can compare
+    against `/tasks/{confirm_task_id}/steps` (action_executed.detail).
+    """
+    out, call_error = _bridge_call(base_url, payload)
+    actual = {
+        "task_id": out.get("task_id"),
+        "confirm_task_id": out.get("confirm_task_id"),
+        "operation_result": out.get("operation_result"),
+        "verify_passed": out.get("verify_passed"),
+        "verify_reason": out.get("verify_reason"),
+        "failure_layer": out.get("failure_layer"),
+        "raw_result_path": out.get("raw_result_path"),
+        "evidence_paths": out.get("evidence_paths"),
+        "rpa_vendor": out.get("rpa_vendor"),
+        "page_url": out.get("page_url"),
+        "page_profile": out.get("page_profile"),
+        "page_steps": out.get("page_steps"),
+        "page_evidence_count": out.get("page_evidence_count"),
+        "page_failure_code": out.get("page_failure_code"),
+    }
+    return {
+        "mode": "task_id_replay",
+        "task_id": task_id,
+        "payload": payload,
+        "bridge_call_error": call_error,
+        "actual": actual,
+        "page_evidence_summary": {
+            "page_profile": actual.get("page_profile"),
+            "page_failure_code": actual.get("page_failure_code"),
+            "page_steps_count": len(actual.get("page_steps") or []) if isinstance(actual.get("page_steps"), list) else 0,
+            "page_evidence_count": actual.get("page_evidence_count"),
+            "raw_result_path_present": bool(actual.get("raw_result_path")),
+        },
+        "steps_checklist": [
+            "operation_result",
+            "verify_passed",
+            "verify_reason",
+            "failure_layer",
+            "raw_result_path",
+            "rpa_vendor",
+            "confirm_task_id",
+            "target_task_id",
+            "page_url",
+            "page_profile",
+            "page_steps",
+            "page_evidence_count",
+            "page_failure_code",
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="P7.0 local Yingdao bridge rehearsal")
     parser.add_argument("--base-url", default="http://127.0.0.1:17891")
@@ -128,45 +182,46 @@ def main() -> int:
     if not bool(args.print_expected_only):
         out, call_error = _bridge_call(str(args.base_url), payload)
     align = _governance_alignment(out) if out else {"sample_bucket": "call_failed", "p62_view": "manual_review"}
-    print(
-        json.dumps(
-            {
-                "sample": str(args.sample),
-                "payload": payload,
-                "expected": expected,
-                "bridge_call_error": call_error,
-                "actual": {
-                    "task_id": out.get("task_id"),
-                    "confirm_task_id": out.get("confirm_task_id"),
-                    "operation_result": out.get("operation_result"),
-                    "verify_passed": out.get("verify_passed"),
-                    "verify_reason": out.get("verify_reason"),
-                    "failure_layer": out.get("failure_layer"),
-                    "raw_result_path": out.get("raw_result_path"),
-                    "evidence_paths": out.get("evidence_paths"),
-                    "rpa_vendor": out.get("rpa_vendor"),
-                    "page_url": out.get("page_url"),
-                    "page_profile": out.get("page_profile"),
-                    "page_steps": out.get("page_steps"),
-                    "page_evidence_count": out.get("page_evidence_count"),
-                    "page_failure_code": out.get("page_failure_code"),
-                },
-                "governance_alignment": align,
-                "steps_checklist": [
-                    "operation_result",
-                    "verify_passed",
-                    "verify_reason",
-                    "failure_layer",
-                    "raw_result_path",
-                    "rpa_vendor",
-                    "confirm_task_id",
-                    "target_task_id",
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
+    base_report = {
+        "sample": str(args.sample),
+        "payload": payload,
+        "expected": expected,
+        "bridge_call_error": call_error,
+        "actual": {
+            "task_id": out.get("task_id"),
+            "confirm_task_id": out.get("confirm_task_id"),
+            "operation_result": out.get("operation_result"),
+            "verify_passed": out.get("verify_passed"),
+            "verify_reason": out.get("verify_reason"),
+            "failure_layer": out.get("failure_layer"),
+            "raw_result_path": out.get("raw_result_path"),
+            "evidence_paths": out.get("evidence_paths"),
+            "rpa_vendor": out.get("rpa_vendor"),
+            "page_url": out.get("page_url"),
+            "page_profile": out.get("page_profile"),
+            "page_steps": out.get("page_steps"),
+            "page_evidence_count": out.get("page_evidence_count"),
+            "page_failure_code": out.get("page_failure_code"),
+        },
+        "governance_alignment": align,
+        "steps_checklist": [
+            "operation_result",
+            "verify_passed",
+            "verify_reason",
+            "failure_layer",
+            "raw_result_path",
+            "rpa_vendor",
+            "confirm_task_id",
+            "target_task_id",
+        ],
+    }
+    if str(args.task_id or "").strip():
+        base_report["task_id_replay"] = build_task_id_replay_report(
+            task_id=str(args.task_id),
+            base_url=str(args.base_url),
+            payload=payload,
         )
-    )
+    print(json.dumps(base_report, ensure_ascii=False, indent=2))
     return 0
 
 

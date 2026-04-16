@@ -10,7 +10,7 @@
 仅围绕 `warehouse.adjust_inventory` 落地：
 
 - happy path：打开页面 -> 定位 SKU -> 输入参数 -> 提交 -> 读取回显
-- failed path：页面失败（本轮固定 `element_missing`，并保留 `page_timeout`）
+- failed path：页面失败（固定 `element_missing` / `page_timeout`）
 - verify_fail：写后核验失败仍走既有口径
 
 并在不破坏旧字段语义前提下，补齐页面证据字段透传到 `/steps`。
@@ -74,7 +74,16 @@
 2. `page_failure`（固定 `element_missing`）
 3. `verify_fail`
 
-可选保留：`timeout`（`page_timeout`）
+并纳入固定回归：`timeout`（`page_timeout`）
+
+---
+
+## 5.1 page_failure_code -> failure_layer 映射（稳定）
+
+| page_failure_code | failure_layer | operation_result | verify_reason |
+|---|---|---|---|
+| `element_missing` | `bridge_page_failed` | `write_adjust_inventory_bridge_page_failed` | `page_element_missing:sku_locator` |
+| `page_timeout` | `bridge_timeout` | `write_adjust_inventory_bridge_timeout` | `bridge_request_timeout` |
 
 ---
 

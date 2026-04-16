@@ -69,6 +69,20 @@ _BRIDGE_RESULT_REQUIRED_KEYS = (
     "evidence_paths",
 )
 
+_PAGE_FAILURE_MAPPING: dict[str, dict[str, str]] = {
+    "element_missing": {
+        "failure_layer": "bridge_page_failed",
+        "operation_result": "write_adjust_inventory_bridge_page_failed",
+        "verify_reason": "page_element_missing:sku_locator",
+    },
+    # Keep consistent with P70 timeout semantics.
+    "page_timeout": {
+        "failure_layer": "bridge_timeout",
+        "operation_result": "write_adjust_inventory_bridge_timeout",
+        "verify_reason": "bridge_request_timeout",
+    },
+}
+
 
 def _base_controlled_page_url() -> str:
     return str(settings.YINGDAO_CONTROLLED_PAGE_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
@@ -98,7 +112,25 @@ def _run_controlled_page_job(payload: dict[str, Any]) -> dict[str, Any]:
     page_url = f"{base_url}/api/v1/internal/rpa-sandbox/admin-like/catalog?{urlencode({'sku': sku})}"
 
     if page_failure_mode == "page_timeout":
-        raise BridgeJobError(failure_layer="bridge_result_timeout", message="page_timeout")
+        m = _PAGE_FAILURE_MAPPING["page_timeout"]
+        return {
+            "task_id": task_id,
+            "confirm_task_id": confirm_task_id,
+            "provider_id": provider_id,
+            "capability": capability,
+            "operation_result": m["operation_result"],
+            "verify_passed": False,
+            "verify_reason": m["verify_reason"],
+            "failure_layer": m["failure_layer"],
+            "status": "failed",
+            "raw_result_path": "",
+            "evidence_paths": [],
+            "page_url": page_url,
+            "page_profile": page_profile,
+            "page_steps": ["open_page"],
+            "page_evidence_count": 0,
+            "page_failure_code": "page_timeout",
+        }
 
     # Step 1: open controlled page.
     page_steps.append("open_page")
@@ -253,6 +285,15 @@ def run_bridge_job(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_bridge_output(req: BridgeRunRequest, out: dict[str, Any]) -> BridgeRunResponse:
+    # P71 stabilization: when page_failure_code is provided, ensure old fields are stable and explicit.
+    code = str(out.get("page_failure_code") or "").strip().lower()
+    if code and code in _PAGE_FAILURE_MAPPING:
+        m = _PAGE_FAILURE_MAPPING[code]
+        out.setdefault("failure_layer", m["failure_layer"])
+        out.setdefault("operation_result", m["operation_result"])
+        out.setdefault("verify_reason", m["verify_reason"])
+        out.setdefault("verify_passed", False)
+        out.setdefault("status", "failed")
     return BridgeRunResponse(
         task_id=str(out.get("task_id") or req.task_id),
         confirm_task_id=str(out.get("confirm_task_id") or req.confirm_task_id),

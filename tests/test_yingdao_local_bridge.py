@@ -221,3 +221,30 @@ def test_bridge_run_controlled_page_element_missing(monkeypatch):
     assert out["failure_layer"] == "bridge_page_failed"
     assert out["verify_passed"] is False
     assert out["page_failure_code"] == "element_missing"
+
+
+def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
+    old_mode = bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE
+    bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = "controlled_page"
+    try:
+        out = bridge_mod.run_bridge_job(
+            {
+                "task_id": "TASK-P71-LOCAL-BRIDGE-PTIMEOUT",
+                "confirm_task_id": "TASK-P71-LOCAL-BRIDGE-CFM-PTIMEOUT",
+                "provider_id": "odoo",
+                "capability": "warehouse.adjust_inventory",
+                "sku": "A001",
+                "delta": 5,
+                "old_inventory": 100,
+                "target_inventory": 105,
+                "page_failure_mode": "page_timeout",
+            }
+        )
+    finally:
+        bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = old_mode
+
+    assert out["page_failure_code"] == "page_timeout"
+    assert out["failure_layer"] == "bridge_timeout"
+    assert out["operation_result"] == "write_adjust_inventory_bridge_timeout"
+    assert out["verify_passed"] is False
+    assert out["verify_reason"] == "bridge_request_timeout"
