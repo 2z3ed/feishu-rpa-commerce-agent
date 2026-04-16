@@ -74,3 +74,58 @@
 - `raw_result_path`
 - `rpa_vendor`
 
+---
+
+## 6. 端到端人工演练清单（新页面）
+
+目标：使用 `--task-id` 回放输出，与真实 `/tasks/{confirm_task_id}/steps` 的
+`action_executed.detail` 做一一对照。
+
+### 6.1 前置环境（非生产）
+
+```bash
+export ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND=yingdao_bridge
+export YINGDAO_BRIDGE_EXECUTION_MODE=controlled_page
+export YINGDAO_CONTROLLED_PAGE_BASE_URL=http://127.0.0.1:8000
+```
+
+### 6.2 样本覆盖（至少三类，尽量四类）
+
+1. `success`
+2. `element_missing`
+3. `page_timeout`
+4. `verify_fail`（尽量带上）
+
+### 6.3 回放与对照命令（示例）
+
+```bash
+python script/p70_yingdao_bridge_rehearsal.py --sample success --task-id TASK-P72-MANUAL-1 --confirm-task-id TASK-P72-MANUAL-CFM-1
+curl -s "http://127.0.0.1:8000/api/v1/tasks/TASK-P72-MANUAL-CFM-1/steps"
+```
+
+先看脚本输出中的：
+
+- `task_id_replay.actual`
+- `task_id_replay.steps_checklist`
+
+再在 `/steps` 里找到 `step_code=action_executed`，逐项核对。
+
+### 6.4 固定对照项（必须一致）
+
+- 旧字段（不可漂）：
+  - `operation_result`
+  - `verify_passed`
+  - `verify_reason`
+  - `failure_layer`
+  - `raw_result_path`
+  - `rpa_vendor`
+  - `confirm_task_id`
+  - `target_task_id`
+- 页面字段（P72）：
+  - `page_url`
+  - `page_profile`
+  - `page_steps`
+  - `page_evidence_count`
+  - `page_failure_code`
+
+
