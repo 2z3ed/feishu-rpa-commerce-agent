@@ -399,3 +399,98 @@ def test_action_executed_detail_contains_yingdao_bridge_fields(monkeypatch):
         assert "verify_passed=True" in detail
     finally:
         db.close()
+
+
+def test_action_executed_detail_contains_yingdao_bridge_timeout_fields(monkeypatch):
+    fake_celery = types.ModuleType("celery")
+
+    class _Celery:
+        def __init__(self, *args, **kwargs):
+            self.conf = {}
+
+        def config_from_object(self, *args, **kwargs):
+            return None
+
+        def task(self, *args, **kwargs):
+            def _decorator(fn):
+                class _TaskWrapper:
+                    def __init__(self, f):
+                        self.run = f
+
+                return _TaskWrapper(fn)
+
+            return _decorator
+
+    fake_celery.Celery = _Celery
+    monkeypatch.setitem(sys.modules, "celery", fake_celery)
+    fake_lark = types.ModuleType("lark_oapi")
+
+    class _Client:
+        pass
+
+    fake_lark.Client = _Client
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark)
+    ingress_tasks = importlib.import_module("app.tasks.ingress_tasks")
+
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        monkeypatch.setattr(ingress_tasks, "SessionLocal", lambda: db)
+        monkeypatch.setattr(ingress_tasks, "try_write_bitable_ledger", lambda **kwargs: None)
+        monkeypatch.setattr(ingress_tasks, "FeishuClient", lambda: type("_F", (), {"send_text_reply": lambda *_a, **_k: True})())
+        logs: list[tuple[str, str, str]] = []
+        monkeypatch.setattr(ingress_tasks, "log_step", lambda task_id, code, status, detail: logs.append((code, status, detail)))
+
+        task_id = "TASK-P70-DETAIL-BRIDGE-TIMEOUT"
+        db.add(TaskRecord(task_id=task_id, source_platform="feishu", status="queued", intent_text="确认执行 TASK-ORIG-3"))
+        db.commit()
+        monkeypatch.setattr(
+            ingress_tasks.lang_graph,
+            "invoke",
+            lambda state: {
+                "intent_code": "system.confirm_task",
+                "execution_mode": "api",
+                "platform": "odoo",
+                "execution_backend": "yingdao_bridge",
+                "client_profile": "yingdao_runner",
+                "provider_id": "odoo",
+                "capability": "warehouse.adjust_inventory",
+                "readiness_status": "ready",
+                "endpoint_profile": "odoo_product_stock_v1",
+                "session_injection_mode": "header",
+                "result_summary": "确认失败",
+                "status": "failed",
+                "parsed_result": {
+                    "operation_result": "write_adjust_inventory_bridge_timeout",
+                    "verify_passed": False,
+                    "verify_reason": "bridge_request_timeout",
+                    "failure_layer": "bridge_timeout",
+                    "confirm_backend": "yingdao_bridge",
+                    "rpa_vendor": "yingdao",
+                    "raw_result_path": "",
+                    "target_task_id": "TASK-ORIG-3",
+                    "confirm_task_id": task_id,
+                    "original_update_task_id": "TASK-ORIG-3",
+                    "evidence_paths": [],
+                },
+            },
+        )
+        ingress_tasks.process_ingress_message.run(
+            None,
+            task_id=task_id,
+            intent_text="确认执行 TASK-ORIG-3",
+            source_message_id="",
+            chat_id="chat-1",
+        )
+        detail_logs = [d for code, _st, d in logs if code == "action_executed"]
+        assert len(detail_logs) == 1
+        detail = detail_logs[0]
+        assert "confirm_backend=yingdao_bridge" in detail
+        assert "operation_result=write_adjust_inventory_bridge_timeout" in detail
+        assert "verify_passed=False" in detail
+        assert "verify_reason=bridge_request_timeout" in detail
+        assert "failure_layer=bridge_timeout" in detail
+    finally:
+        db.close()

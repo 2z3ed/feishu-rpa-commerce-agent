@@ -1,4 +1,4 @@
-# 影刀本地桥接 PoC（第二轮）：最小稳态
+# 影刀本地桥接 PoC（第三轮）：最小发布演练口径
 
 > 范围：仅 `warehouse.adjust_inventory`。  
 > 前提：无影刀控制台权限；影刀仅作为本机执行器；smoke harness 已通过。  
@@ -134,32 +134,75 @@ export YINGDAO_BRIDGE_BASE_URL=http://127.0.0.1:17891
 4. 对照 `YINGDAO_BRIDGE_WAIT_TIMEOUT_S` 与 `YINGDAO_BRIDGE_POLL_INTERVAL_MS`
 5. 在主系统 `/tasks/{confirm_task_id}/steps` 查看 `failure_layer/verify_reason/raw_result_path`
 
-## 8) 可重复手动演练入口
+## 8) 固定发布演练样本（第三轮）
+
+固定三类样本（由脚本内置）：
+
+1. 成功样本：`sample=success`
+2. 超时失败样本：`sample=timeout`
+3. 核验失败样本：`sample=verify_fail`
+
+对应固定预期：
+
+- `success` -> `operation_result=write_adjust_inventory`, `verify_passed=true`, `failure_layer=""`
+- `timeout` -> `operation_result=write_adjust_inventory_bridge_timeout`, `verify_passed=false`, `failure_layer=bridge_timeout`
+- `verify_fail` -> `operation_result=write_adjust_inventory_verify_failed`, `verify_passed=false`, `failure_layer=verify_failed`
+
+这些样本用于最小发布演练口径，不用于扩展业务范围。
+
+## 9) 可重复手动演练入口
 
 新增脚本：`script/p70_yingdao_bridge_rehearsal.py`
 
-运行示例：
+分别回放三类样本：
 
 ```bash
-python script/p70_yingdao_bridge_rehearsal.py \
-  --base-url http://127.0.0.1:17891 \
-  --task-id TASK-P70-REHEARSAL-1 \
-  --confirm-task-id TASK-P70-REHEARSAL-CFM-1
+python script/p70_yingdao_bridge_rehearsal.py --sample success
+python script/p70_yingdao_bridge_rehearsal.py --sample timeout
+python script/p70_yingdao_bridge_rehearsal.py --sample verify_fail
 ```
 
-强制核验失败样本：
+仅打印固定预期（不发请求）：
 
 ```bash
-python script/p70_yingdao_bridge_rehearsal.py --force-verify-fail
+python script/p70_yingdao_bridge_rehearsal.py --sample timeout --print-expected-only
 ```
 
-脚本输出最小核查字段：
+脚本输出结构包含：
 
-- `task_id / confirm_task_id`
-- `operation_result / verify_passed / verify_reason / failure_layer`
-- `raw_result_path / evidence_paths`
+- `sample`
+- `payload`（固定输入）
+- `expected`（固定预期）
+- `actual`（bridge 实际输出）
+- `governance_alignment`（与现有治理理解的最小对应）
+- `steps_checklist`（/steps 对照检查项）
 
-## 9) 边界声明
+## 10) /steps 对照检查清单（发布演练最小版）
+
+对照 `/tasks/{confirm_task_id}/steps` 的 `action_executed.detail`：
+
+- `operation_result`
+- `verify_passed`
+- `verify_reason`
+- `failure_layer`
+- `raw_result_path`
+- `rpa_vendor`
+- `confirm_task_id`
+- `target_task_id`
+
+要求：脚本 `actual` 字段与 `action_executed.detail` 对应字段语义一致。
+
+## 11) 与现有 gate / 治理理解的最小对齐
+
+本轮不修改 P6.2 规则，只做桥接结果映射说明：
+
+- `success` -> 治理视角 `verify_pass_count`
+- `timeout` -> 治理视角 `other_failed_confirms`（桥接失败类）
+- `verify_fail` -> 治理视角 `verify_fail_count`
+
+因此桥接 PoC 输出不会破坏既有 P6.2 的 gate / summary 理解。
+
+## 12) 边界声明
 
 - 这是本地桥接 PoC 骨架，不是生产接入方案。
 - 不涉及影刀控制台/API Key/Flow 权限。

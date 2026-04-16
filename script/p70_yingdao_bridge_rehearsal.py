@@ -3,25 +3,50 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
+import urllib.error
 import urllib.request
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="P7.0 local Yingdao bridge rehearsal")
-    parser.add_argument("--base-url", default="http://127.0.0.1:17891")
-    parser.add_argument("--task-id", default="TASK-P70-REHEARSAL-1")
-    parser.add_argument("--confirm-task-id", default="TASK-P70-REHEARSAL-CFM-1")
-    parser.add_argument("--sku", default="A001")
-    parser.add_argument("--delta", type=int, default=5)
-    parser.add_argument("--old-inventory", type=int, default=100)
-    parser.add_argument("--target-inventory", type=int, default=105)
-    parser.add_argument("--environment", default="local_poc")
-    parser.add_argument("--force-verify-fail", action="store_true")
-    args = parser.parse_args()
+SAMPLE_PRESETS = {
+    "success": {
+        "task_id": "TASK-P70-REHEARSAL-SUCCESS-1",
+        "confirm_task_id": "TASK-P70-REHEARSAL-SUCCESS-CFM-1",
+        "force_verify_fail": False,
+        "expected": {
+            "operation_result": "write_adjust_inventory",
+            "verify_passed": True,
+            "failure_layer": "",
+        },
+    },
+    "timeout": {
+        "task_id": "TASK-P70-REHEARSAL-TIMEOUT-1",
+        "confirm_task_id": "TASK-P70-REHEARSAL-TIMEOUT-CFM-1",
+        "force_verify_fail": False,
+        "expected": {
+            "operation_result": "write_adjust_inventory_bridge_timeout",
+            "verify_passed": False,
+            "failure_layer": "bridge_timeout",
+        },
+    },
+    "verify_fail": {
+        "task_id": "TASK-P70-REHEARSAL-VFAIL-1",
+        "confirm_task_id": "TASK-P70-REHEARSAL-VFAIL-CFM-1",
+        "force_verify_fail": True,
+        "expected": {
+            "operation_result": "write_adjust_inventory_verify_failed",
+            "verify_passed": False,
+            "failure_layer": "verify_failed",
+        },
+    },
+}
 
-    payload = {
-        "task_id": str(args.task_id),
-        "confirm_task_id": str(args.confirm_task_id),
+
+def _build_payload(args) -> dict:
+    preset = SAMPLE_PRESETS[str(args.sample)]
+    return {
+        "task_id": str(args.task_id or preset["task_id"]),
+        "confirm_task_id": str(args.confirm_task_id or preset["confirm_task_id"]),
         "provider_id": "odoo",
         "capability": "warehouse.adjust_inventory",
         "sku": str(args.sku),
@@ -29,27 +54,92 @@ def main() -> int:
         "old_inventory": int(args.old_inventory),
         "target_inventory": int(args.target_inventory),
         "environment": str(args.environment),
-        "force_verify_fail": bool(args.force_verify_fail),
+        "force_verify_fail": bool(args.force_verify_fail or preset["force_verify_fail"]),
     }
+
+
+def _bridge_call(base_url: str, payload: dict) -> tuple[dict, str]:
     req = urllib.request.Request(
-        f"{str(args.base_url).rstrip('/')}/run",
+        f"{str(base_url).rstrip('/')}/run",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        out = json.loads((resp.read() or b"{}").decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads((resp.read() or b"{}").decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        return {}, f"bridge_http_error:{exc.code}"
+    except (TimeoutError, socket.timeout):
+        return {}, "bridge_timeout"
+    except urllib.error.URLError as exc:
+        return {}, f"bridge_unreachable:{exc.reason}"
+
+
+def _governance_alignment(result: dict) -> dict:
+    op = str(result.get("operation_result") or "")
+    fl = str(result.get("failure_layer") or "")
+    vp = bool(result.get("verify_passed", False))
+    if op == "write_adjust_inventory" and vp:
+        return {"sample_bucket": "success", "p62_view": "verify_pass_count"}
+    if "timeout" in op or fl == "bridge_timeout":
+        return {"sample_bucket": "timeout_failure", "p62_view": "other_failed_confirms"}
+    if op == "write_adjust_inventory_verify_failed" or fl == "verify_failed":
+        return {"sample_bucket": "verify_failure", "p62_view": "verify_fail_count"}
+    return {"sample_bucket": "unclassified", "p62_view": "manual_review"}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="P7.0 local Yingdao bridge rehearsal")
+    parser.add_argument("--base-url", default="http://127.0.0.1:17891")
+    parser.add_argument("--sample", choices=("success", "timeout", "verify_fail"), default="success")
+    parser.add_argument("--task-id", default="")
+    parser.add_argument("--confirm-task-id", default="")
+    parser.add_argument("--sku", default="A001")
+    parser.add_argument("--delta", type=int, default=5)
+    parser.add_argument("--old-inventory", type=int, default=100)
+    parser.add_argument("--target-inventory", type=int, default=105)
+    parser.add_argument("--environment", default="local_poc")
+    parser.add_argument("--force-verify-fail", action="store_true")
+    parser.add_argument("--print-expected-only", action="store_true")
+    args = parser.parse_args()
+
+    payload = _build_payload(args)
+    expected = SAMPLE_PRESETS[str(args.sample)]["expected"]
+    out = {}
+    call_error = ""
+    if not bool(args.print_expected_only):
+        out, call_error = _bridge_call(str(args.base_url), payload)
+    align = _governance_alignment(out) if out else {"sample_bucket": "call_failed", "p62_view": "manual_review"}
     print(
         json.dumps(
             {
-                "task_id": out.get("task_id"),
-                "confirm_task_id": out.get("confirm_task_id"),
-                "operation_result": out.get("operation_result"),
-                "verify_passed": out.get("verify_passed"),
-                "verify_reason": out.get("verify_reason"),
-                "failure_layer": out.get("failure_layer"),
-                "raw_result_path": out.get("raw_result_path"),
-                "evidence_paths": out.get("evidence_paths"),
+                "sample": str(args.sample),
+                "payload": payload,
+                "expected": expected,
+                "bridge_call_error": call_error,
+                "actual": {
+                    "task_id": out.get("task_id"),
+                    "confirm_task_id": out.get("confirm_task_id"),
+                    "operation_result": out.get("operation_result"),
+                    "verify_passed": out.get("verify_passed"),
+                    "verify_reason": out.get("verify_reason"),
+                    "failure_layer": out.get("failure_layer"),
+                    "raw_result_path": out.get("raw_result_path"),
+                    "evidence_paths": out.get("evidence_paths"),
+                    "rpa_vendor": out.get("rpa_vendor"),
+                },
+                "governance_alignment": align,
+                "steps_checklist": [
+                    "operation_result",
+                    "verify_passed",
+                    "verify_reason",
+                    "failure_layer",
+                    "raw_result_path",
+                    "rpa_vendor",
+                    "confirm_task_id",
+                    "target_task_id",
+                ],
             },
             ensure_ascii=False,
             indent=2,
