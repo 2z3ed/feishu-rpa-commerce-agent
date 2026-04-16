@@ -9,6 +9,7 @@ from app.db.models import TaskRecord
 from app.graph.nodes.execute_action import execute_action
 from app.graph.nodes.finalize_result import finalize_result
 from app.core.config import settings
+from app.rpa.yingdao_runner import YingdaoBridgeError
 
 
 def _assert_adjust_governance_fields_stable(out: dict):
@@ -512,6 +513,81 @@ def test_p70_confirm_adjust_inventory_can_use_yingdao_bridge(monkeypatch):
         assert pr.get("rpa_vendor") == "yingdao"
         assert pr.get("raw_result_path") == "/tmp/yingdao/result.json"
         assert pr.get("operation_result") == "write_adjust_inventory"
+    finally:
+        settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = old_backend
+        db.close()
+
+
+def test_p70_confirm_adjust_inventory_bridge_timeout_failure_stable(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_backend = settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND
+        settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = "yingdao_bridge"
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        def _raise_timeout(payload):  # noqa: ARG001
+            raise YingdaoBridgeError(
+                failure_layer="bridge_timeout",
+                operation_result="write_adjust_inventory_bridge_timeout",
+                verify_reason="bridge_request_timeout",
+            )
+
+        monkeypatch.setattr(execute_action_mod, "run_yingdao_adjust_inventory", _raise_timeout)
+
+        orig_task_id = "TASK-P70-ORIG-TIMEOUT"
+        confirm_task_id = "TASK-P70-CFM-TIMEOUT"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        db.add(
+            TaskStep(
+                id="step-p70-timeout-ctx",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail='{"provider_id":"odoo","capability":"warehouse.adjust_inventory","sku":"A001","old_inventory":100,"delta":5,"target_inventory":105}',
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "failed"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("failure_layer") == "bridge_timeout"
+        assert pr.get("operation_result") == "write_adjust_inventory_bridge_timeout"
+        assert pr.get("verify_passed") is False
+        assert pr.get("verify_reason") == "bridge_request_timeout"
     finally:
         settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = old_backend
         db.close()

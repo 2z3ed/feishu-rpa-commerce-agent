@@ -39,15 +39,43 @@ class BridgeRunResponse(BaseModel):
     evidence_paths: list[str]
 
 
+class BridgeJobError(RuntimeError):
+    def __init__(self, *, failure_layer: str, message: str):
+        super().__init__(message)
+        self.failure_layer = failure_layer
+        self.message = message
+
+
+_BRIDGE_RESULT_REQUIRED_KEYS = (
+    "task_id",
+    "confirm_task_id",
+    "provider_id",
+    "capability",
+    "operation_result",
+    "verify_passed",
+    "verify_reason",
+    "failure_layer",
+    "status",
+    "raw_result_path",
+    "evidence_paths",
+)
+
+
 def _ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        raise BridgeJobError(failure_layer="bridge_input_write_failed", message=f"ensure_dir_failed:{exc}") from exc
 
 
 def _write_bridge_input(payload: dict[str, Any], input_dir: Path) -> Path:
     _ensure_dir(input_dir)
     task_id = str(payload.get("task_id") or "unknown")
     fp = input_dir / f"{task_id}.input.json"
-    fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        raise BridgeJobError(failure_layer="bridge_input_write_failed", message=f"input_write_failed:{exc}") from exc
     return fp
 
 
@@ -60,11 +88,26 @@ def _wait_and_load_bridge_output(task_id: str, output_dir: Path) -> dict[str, An
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if done_fp.exists():
-            return json.loads(done_fp.read_text(encoding="utf-8") or "{}")
+            try:
+                return json.loads(done_fp.read_text(encoding="utf-8") or "{}")
+            except Exception as exc:
+                raise BridgeJobError(
+                    failure_layer="bridge_result_invalid_json",
+                    message=f"result_invalid_json:{exc}",
+                ) from exc
         if fail_fp.exists():
-            return json.loads(fail_fp.read_text(encoding="utf-8") or "{}")
+            try:
+                return json.loads(fail_fp.read_text(encoding="utf-8") or "{}")
+            except Exception as exc:
+                raise BridgeJobError(
+                    failure_layer="bridge_result_invalid_json",
+                    message=f"result_invalid_json:{exc}",
+                ) from exc
         time.sleep(poll_ms / 1000.0)
-    raise TimeoutError(f"bridge_wait_timeout task_id={task_id}")
+    raise BridgeJobError(
+        failure_layer="bridge_result_timeout",
+        message=f"result_file_timeout task_id={task_id}",
+    )
 
 
 def run_bridge_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -76,7 +119,16 @@ def run_bridge_job(payload: dict[str, Any]) -> dict[str, Any]:
     _write_bridge_input(payload, input_dir=input_dir)
     out = _wait_and_load_bridge_output(task_id, output_dir=output_dir)
     if not isinstance(out, dict):
-        raise ValueError("invalid_bridge_output")
+        raise BridgeJobError(
+            failure_layer="bridge_result_invalid_shape",
+            message="result_not_object",
+        )
+    missing = [k for k in _BRIDGE_RESULT_REQUIRED_KEYS if k not in out]
+    if missing:
+        raise BridgeJobError(
+            failure_layer="bridge_result_missing_fields",
+            message=f"result_missing_fields:{','.join(missing)}",
+        )
     return out
 
 
@@ -109,6 +161,8 @@ def health():
 def run(req: BridgeRunRequest):
     try:
         out = run_bridge_job(req.model_dump())
+    except BridgeJobError as exc:
+        raise HTTPException(status_code=500, detail=f"{exc.failure_layer}:{exc.message}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"bridge_run_failed:{exc}") from exc
     return _normalize_bridge_output(req, out)

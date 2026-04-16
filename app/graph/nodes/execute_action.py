@@ -27,7 +27,7 @@ from app.rpa.confirm_update_price import (
     run_confirm_update_price_rpa,
 )
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
-from app.rpa.yingdao_runner import run_yingdao_adjust_inventory
+from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
 from app.utils.task_logger import log_step
 
 
@@ -1204,9 +1204,10 @@ def _confirm_execute_odoo_adjust_inventory(
         }
         try:
             bridge_out = run_yingdao_adjust_inventory(bridge_payload)
-        except Exception as exc:
-            layer = "bridge_unavailable"
-            msg = f"yingdao_bridge_call_failed:{exc}"
+        except YingdaoBridgeError as exc:
+            layer = str(exc.failure_layer or "bridge_unavailable")
+            op = str(exc.operation_result or "write_adjust_inventory_bridge_failed")
+            msg = str(exc.verify_reason or f"yingdao_bridge_call_failed:{exc}")
             log_step(current_task_id, "controlled_write_failed", "failed", msg[:900])
             return {
                 "error": f"[{layer}] {msg}",
@@ -1216,7 +1217,7 @@ def _confirm_execute_odoo_adjust_inventory(
                 "confirm_task_id": current_task_id or None,
                 "parsed_result": {
                     "failure_layer": layer,
-                    "operation_result": "write_adjust_inventory_failed",
+                    "operation_result": op,
                     "verify_passed": False,
                     "verify_reason": msg,
                     "old_inventory": old_inv,
