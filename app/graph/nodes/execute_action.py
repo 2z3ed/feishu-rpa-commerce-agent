@@ -46,6 +46,21 @@ def _strip_error_prefix(raw: str) -> str:
     return re.sub(r"^\[[^\]]+\]\s*", "", text).strip()
 
 
+def _evaluate_adjust_inventory_gate(slots: dict) -> tuple[bool, str]:
+    """Return (allow, reason) for the minimal gate entry."""
+    sku = str(slots.get("sku") or "").strip().upper()
+    delta_raw = slots.get("delta")
+    try:
+        delta = int(delta_raw)
+    except Exception:
+        delta = 0
+    if not sku:
+        return False, "sku_required"
+    if delta == 0:
+        return False, "delta_required"
+    return True, "allow"
+
+
 def _apply_adjust_inventory_governance_baseline(state: dict, result: dict | None = None) -> None:
     """Keep adjust_inventory governance fields stable across success/blocked/verify-failed paths."""
     result = result if isinstance(result, dict) else {}
@@ -267,6 +282,37 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "sandbox_http@odoo_inventory"
 
         elif intent_code == "warehouse.adjust_inventory":
+            gate_allow, gate_reason = _evaluate_adjust_inventory_gate(slots)
+            state["gate_reason"] = gate_reason
+            state["gate_allow"] = gate_allow
+            state["gate_status"] = "allow" if gate_allow else "blocked"
+            if not gate_allow:
+                state["status"] = "failed"
+                state["result_summary"] = f"[warehouse.adjust_inventory] 门禁拦截：{gate_reason}"
+                state["error_message"] = f"[gate_blocked] {gate_reason}"
+                state["provider_id"] = "odoo"
+                state["capability"] = "warehouse.adjust_inventory"
+                state["readiness_status"] = "gate_blocked"
+                state["endpoint_profile"] = "odoo_product_stock_v1"
+                state["session_injection_mode"] = "header"
+                state["execution_backend"] = "internal_sandbox"
+                state["selected_backend"] = "internal_sandbox"
+                state["final_backend"] = "internal_sandbox"
+                state["backend_selection_reason"] = f"provider_capability_route|gate_blocked:{gate_reason}"
+                state["client_profile"] = "sandbox_http@odoo_inventory_adjust"
+                state["confirm_backend"] = "none"
+                state["parsed_result"] = {
+                    "failure_layer": "gate_blocked",
+                    "operation_result": "gate_blocked_noop",
+                    "gate_reason": gate_reason,
+                    "verify_passed": False,
+                    "verify_reason": gate_reason,
+                    "target_task_id": task_id,
+                    "original_update_task_id": task_id,
+                    "confirm_task_id": "",
+                    "confirm_backend": "none",
+                }
+                return state
             result = execute_odoo_adjust_inventory_prepare(task_id=task_id, slots=slots)
             state["status"] = "awaiting_confirmation"
             state["result_summary"] = format_warehouse_adjust_inventory_confirmation(result)

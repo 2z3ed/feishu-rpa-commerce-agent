@@ -597,3 +597,157 @@ def test_p70_confirm_adjust_inventory_bridge_timeout_failure_stable(monkeypatch)
     finally:
         settings.ODOO_ADJUST_INVENTORY_CONFIRM_EXECUTION_BACKEND = old_backend
         db.close()
+
+
+def test_p73_adjust_inventory_gate_blocks_missing_sku(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        task_id = "TASK-P73-GATE-BLOCK"
+        db.add(TaskRecord(task_id=task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": task_id,
+                "intent_code": "warehouse.adjust_inventory",
+                "slots": {"delta": 5},
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "failed"
+        assert out.get("gate_allow") is False
+        assert out.get("gate_status") == "blocked"
+        assert out.get("gate_reason") == "sku_required"
+        pr = out.get("parsed_result") or {}
+        assert pr.get("failure_layer") == "gate_blocked"
+        assert pr.get("operation_result") == "gate_blocked_noop"
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p73_adjust_inventory_gate_allows_and_preserves_confirm_flow(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        orig_task_id = "TASK-P73-GATE-ALLOW"
+        confirm_task_id = "TASK-P73-GATE-ALLOW-CFM"
+        db.add(TaskRecord(task_id=orig_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": orig_task_id,
+                "intent_code": "warehouse.adjust_inventory",
+                "slots": {"sku": "A001", "delta": 5},
+                "status": "processing",
+            }
+        )
+        assert out["status"] == "awaiting_confirmation"
+        assert out.get("gate_allow") is True
+        assert out.get("gate_status") == "allow"
+        assert out.get("gate_reason") == "allow"
+        assert "请回复：确认执行" in (out.get("result_summary") or "")
+        assert out.get("parsed_result", {}).get("operation_result") == "risk_adjust_inventory_pending"
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
+
+
+def test_p73_adjust_inventory_gate_does_not_break_existing_confirm_regression(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    db = Session()
+    try:
+        old_sandbox = settings.ENABLE_INTERNAL_SANDBOX_API
+        settings.ENABLE_INTERNAL_SANDBOX_API = True
+
+        import app.db.session as db_session
+        import app.utils.task_logger as task_logger
+        import app.graph.nodes.execute_action as execute_action_mod
+        import app.graph.nodes.finalize_result as finalize_mod
+
+        monkeypatch.setattr(db_session, "SessionLocal", lambda: db)
+        monkeypatch.setattr(task_logger, "SessionLocal", lambda: db)
+        monkeypatch.setattr(execute_action_mod, "SessionLocal", lambda: db)
+        monkeypatch.setattr(finalize_mod, "SessionLocal", lambda: db)
+
+        orig_task_id = "TASK-P73-GATE-REG"
+        confirm_task_id = "TASK-P73-GATE-REG-CFM"
+        db.add(
+            TaskRecord(
+                task_id=orig_task_id,
+                source_platform="feishu",
+                status="awaiting_confirmation",
+                intent_text="调整 Odoo SKU A001 库存 +5",
+                result_summary="[warehouse.adjust_inventory] placeholder",
+            )
+        )
+        from app.db.models import TaskStep
+        from app.core.time import get_shanghai_now
+
+        db.add(
+            TaskStep(
+                id="step-p73-gate-reg-ctx",
+                task_id=orig_task_id,
+                step_code="risk_context",
+                step_status="success",
+                detail='{"provider_id":"odoo","capability":"warehouse.adjust_inventory","sku":"A001","old_inventory":100,"delta":5,"target_inventory":105}',
+                created_at=get_shanghai_now(),
+            )
+        )
+        db.add(TaskRecord(task_id=confirm_task_id, source_platform="feishu", status="queued", intent_text=""))
+        db.commit()
+
+        out = execute_action(
+            {
+                "task_id": confirm_task_id,
+                "intent_code": "system.confirm_task",
+                "slots": {"task_id": orig_task_id},
+                "raw_text": f"确认执行 {orig_task_id}",
+                "status": "processing",
+            }
+        )
+        assert out["status"] in {"succeeded", "failed"}
+        assert out.get("capability") == "warehouse.adjust_inventory"
+        assert out.get("provider_id") == "odoo"
+        assert out.get("gate_status", "") in {"", "allow", "blocked"}
+        finalize_result(out)
+    finally:
+        settings.ENABLE_INTERNAL_SANDBOX_API = old_sandbox
+        db.close()
