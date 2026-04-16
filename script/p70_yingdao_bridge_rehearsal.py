@@ -96,12 +96,12 @@ def _governance_alignment(result: dict) -> dict:
     fl = str(result.get("failure_layer") or "")
     vp = bool(result.get("verify_passed", False))
     if op == "write_adjust_inventory" and vp:
-        return {"sample_bucket": "success", "p62_view": "verify_pass_count"}
+        return {"sample_bucket": "success", "p62_view": "verify_pass_count", "gate_status": "allow", "gate_reason": "allow"}
     if "timeout" in op or fl == "bridge_timeout":
-        return {"sample_bucket": "timeout_failure", "p62_view": "other_failed_confirms"}
+        return {"sample_bucket": "timeout_failure", "p62_view": "other_failed_confirms", "gate_status": "allow", "gate_reason": "allow"}
     if op == "write_adjust_inventory_verify_failed" or fl == "verify_failed":
-        return {"sample_bucket": "verify_failure", "p62_view": "verify_fail_count"}
-    return {"sample_bucket": "unclassified", "p62_view": "manual_review"}
+        return {"sample_bucket": "verify_failure", "p62_view": "verify_fail_count", "gate_status": "allow", "gate_reason": "allow"}
+    return {"sample_bucket": "unclassified", "p62_view": "manual_review", "gate_status": "allow", "gate_reason": "allow"}
 
 
 def build_task_id_replay_report(*, task_id: str, base_url: str, payload: dict) -> dict:

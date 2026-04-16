@@ -27,6 +27,8 @@ def test_rehearsal_fixed_sample_payloads():
     t = rehearsal._build_payload(_args(sample="timeout"))
     v = rehearsal._build_payload(_args(sample="verify_fail"))
     assert s["task_id"] == "TASK-P70-REHEARSAL-SUCCESS-1"
+    assert s["page_failure_mode"] == ""
+    assert s["force_verify_fail"] is False
     assert p["task_id"] == "TASK-P71-REHEARSAL-PFAIL-1"
     assert p["page_failure_mode"] == "element_missing"
     assert t["page_failure_mode"] == "page_timeout"
@@ -36,23 +38,29 @@ def test_rehearsal_fixed_sample_payloads():
 
 def test_rehearsal_governance_alignment_success():
     out = rehearsal._governance_alignment(
-        {"operation_result": "write_adjust_inventory", "verify_passed": True, "failure_layer": ""}
+        {"operation_result": "write_adjust_inventory", "verify_passed": True, "failure_layer": "", "page_failure_code": ""}
     )
     assert out["sample_bucket"] == "success"
     assert out["p62_view"] == "verify_pass_count"
+    assert out["gate_status"] == "allow"
+    assert out["gate_reason"] == "allow"
 
 
 def test_rehearsal_governance_alignment_timeout_and_verify_fail():
     timeout_out = rehearsal._governance_alignment(
-        {"operation_result": "write_adjust_inventory_bridge_timeout", "verify_passed": False, "failure_layer": "bridge_timeout"}
+        {"operation_result": "write_adjust_inventory_bridge_timeout", "verify_passed": False, "failure_layer": "bridge_timeout", "page_failure_code": "page_timeout"}
     )
     verify_fail_out = rehearsal._governance_alignment(
-        {"operation_result": "write_adjust_inventory_verify_failed", "verify_passed": False, "failure_layer": "verify_failed"}
+        {"operation_result": "write_adjust_inventory_verify_failed", "verify_passed": False, "failure_layer": "verify_failed", "page_failure_code": ""}
     )
     assert timeout_out["sample_bucket"] == "timeout_failure"
     assert timeout_out["p62_view"] == "other_failed_confirms"
+    assert timeout_out["gate_status"] == "allow"
+    assert timeout_out["gate_reason"] == "allow"
     assert verify_fail_out["sample_bucket"] == "verify_failure"
     assert verify_fail_out["p62_view"] == "verify_fail_count"
+    assert verify_fail_out["gate_status"] == "allow"
+    assert verify_fail_out["gate_reason"] == "allow"
 
 
 def test_task_id_replay_report_structure(monkeypatch):

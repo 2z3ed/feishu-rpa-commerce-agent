@@ -194,6 +194,9 @@ def test_bridge_run_controlled_page_success(monkeypatch):
         "submit",
         "read_page_echo",
     ]
+    assert out["page_failure_code"] == ""
+    assert out["failure_layer"] == ""
+    assert out["verify_reason"] == "ok"
 
 
 def test_bridge_run_controlled_page_element_missing(monkeypatch):
@@ -233,7 +236,10 @@ def test_bridge_run_controlled_page_element_missing(monkeypatch):
     assert out["failure_layer"] == "bridge_page_failed"
     assert out["verify_passed"] is False
     assert out["page_failure_code"] == "element_missing"
+    assert out["verify_reason"] == "page_element_missing:sku_locator"
     assert out["page_steps"] == ["open_dashboard", "navigate_inventory_adjust", "search_sku", "open_drawer"]
+    assert out.get("gate_status", "allow") == "allow"
+    assert out.get("gate_reason", "allow") == "allow"
 
 
 def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
@@ -263,3 +269,69 @@ def test_bridge_page_failure_mapping_page_timeout_is_stable(monkeypatch):
     assert out["verify_passed"] is False
     assert out["verify_reason"] == "bridge_request_timeout"
     assert out["page_steps"] == ["open_dashboard"]
+    assert out.get("gate_status", "allow") == "allow"
+    assert out.get("gate_reason", "allow") == "allow"
+
+
+def test_bridge_run_forced_verify_fail_is_stable(monkeypatch):
+    old_mode = bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE
+    bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = "controlled_page"
+
+    class _Resp:
+        def __init__(self, data: str):
+            self._data = data.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._data
+
+    def _fake_urlopen(req, timeout=30):  # noqa: ARG001
+        url = req.full_url
+        if "admin-like/inventory" in url:
+            return _Resp("<html>ok</html>")
+        if "admin-like/inventory/adjust" in url:
+            return _Resp("<html>ok</html>")
+        if "inventory/adjust" in url:
+            return _Resp('{"provider":"odoo","payload":{"qty_after":105}}')
+        return _Resp("{}")
+
+    monkeypatch.setattr(bridge_mod, "urlopen", _fake_urlopen)
+    try:
+        out = bridge_mod.run_bridge_job(
+            {
+                "task_id": "TASK-P71-LOCAL-BRIDGE-VFAIL",
+                "confirm_task_id": "TASK-P71-LOCAL-BRIDGE-CFM-VFAIL",
+                "provider_id": "odoo",
+                "capability": "warehouse.adjust_inventory",
+                "sku": "A001",
+                "delta": 5,
+                "old_inventory": 100,
+                "target_inventory": 105,
+                "force_verify_fail": True,
+                "page_profile": "internal_inventory_admin_like_v1",
+            }
+        )
+    finally:
+        bridge_mod.settings.YINGDAO_BRIDGE_EXECUTION_MODE = old_mode
+
+    assert out["operation_result"] == "write_adjust_inventory_verify_failed"
+    assert out["failure_layer"] == "verify_failed"
+    assert out["verify_passed"] is False
+    assert "forced_verify_failure" in out["verify_reason"]
+    assert out["page_failure_code"] == ""
+    assert out["page_steps"] == [
+        "open_dashboard",
+        "navigate_inventory_adjust",
+        "search_sku",
+        "open_drawer",
+        "input_delta_target_inventory",
+        "submit",
+        "read_page_echo",
+    ]
+    assert out.get("gate_status", "allow") == "allow"
+    assert out.get("gate_reason", "allow") == "allow"
