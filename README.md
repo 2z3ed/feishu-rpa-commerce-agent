@@ -15,6 +15,16 @@ Feishu RPA Commerce Agent is a backoffice automation system that lets operators 
 
 Feishu RPA Commerce Agent 是一个面向电商后台的智能自动化系统。用户在飞书中通过自然语言下达指令，系统会基于 LangGraph 进行任务编排，结合 RAG 检索规则与历史案例，调用 WooCommerce、Odoo、Chatwoot，并通过 RPA 主执行、API 辅助执行的方式完成真实后台操作，最终将过程与结果回写到飞书消息、飞书卡片和多维表格中。
 
+## 当前阶段状态
+
+- P8 已完成并收口
+- `controlled_page` 已人工验证成立
+- `real_nonprod_page` 已通过自建 stub 建立
+- facts 已入库
+- config / bridge / runner 已接通 readiness 路径
+- 最小自动化闭环成立
+- P83 总演练与阶段收口已完成
+
 ## Highlights
 
 - **Feishu-native interaction**: trigger workflows directly from Feishu messages

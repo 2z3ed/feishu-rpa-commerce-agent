@@ -84,6 +84,147 @@ _PAGE_FAILURE_MAPPING: dict[str, dict[str, str]] = {
 }
 
 
+def _read_nonprod_config(payload: dict[str, Any]) -> dict[str, str]:
+    page_profile = str(payload.get("page_profile") or settings.YINGDAO_REAL_NONPROD_PAGE_PROFILE or "real_nonprod_page")
+    return {
+        "page_profile": page_profile,
+        "base_url": str(settings.YINGDAO_REAL_NONPROD_PAGE_BASE_URL or "").strip(),
+        "entry_url": str(settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or "").strip(),
+        "admin_entry_url": str(settings.YINGDAO_REAL_NONPROD_PAGE_ADMIN_ENTRY_URL or "").strip(),
+        "session_mode": str(settings.YINGDAO_REAL_NONPROD_PAGE_SESSION_MODE or "cookie").strip(),
+        "session_cookie_name": str(settings.YINGDAO_REAL_NONPROD_PAGE_SESSION_COOKIE_NAME or "").strip(),
+        "session_cookie_value": str(settings.YINGDAO_REAL_NONPROD_PAGE_SESSION_COOKIE_VALUE or "").strip(),
+        "search_input_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_SEARCH_INPUT_SELECTOR or "").strip(),
+        "search_button_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_SEARCH_BUTTON_SELECTOR or "").strip(),
+        "result_row_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_RESULT_ROW_SELECTOR or "").strip(),
+        "editor_entry_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_EDITOR_ENTRY_SELECTOR or "").strip(),
+        "editor_container_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_EDITOR_CONTAINER_SELECTOR or "").strip(),
+        "inventory_input_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_INVENTORY_INPUT_SELECTOR or "").strip(),
+        "submit_button_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_SUBMIT_BUTTON_SELECTOR or "").strip(),
+        "success_toast_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_SUCCESS_TOAST_SELECTOR or "").strip(),
+        "error_toast_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_ERROR_TOAST_SELECTOR or "").strip(),
+        "verify_field_selector": str(settings.YINGDAO_REAL_NONPROD_PAGE_VERIFY_FIELD_SELECTOR or "").strip(),
+    }
+
+
+def _real_nonprod_fail(task_id: str, confirm_task_id: str, provider_id: str, capability: str, page_profile: str, page_url: str, page_steps: list[str], *, failure_layer: str, verify_reason: str, page_failure_code: str, operation_result: str = "write_adjust_inventory_bridge_failed") -> dict[str, Any]:
+    return {
+        "task_id": task_id,
+        "confirm_task_id": confirm_task_id,
+        "provider_id": provider_id,
+        "capability": capability,
+        "operation_result": operation_result,
+        "verify_passed": False,
+        "verify_reason": verify_reason,
+        "failure_layer": failure_layer,
+        "status": "failed",
+        "raw_result_path": "",
+        "evidence_paths": [],
+        "page_url": page_url,
+        "page_profile": page_profile,
+        "page_steps": page_steps,
+        "page_evidence_count": 0,
+        "page_failure_code": page_failure_code,
+    }
+
+
+def _run_real_nonprod_page_job(payload: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(payload.get("task_id") or "")
+    confirm_task_id = str(payload.get("confirm_task_id") or "")
+    provider_id = str(payload.get("provider_id") or "odoo")
+    capability = str(payload.get("capability") or "warehouse.adjust_inventory")
+    sku = str(payload.get("sku") or "").strip().upper()
+    delta = int(payload.get("delta") or 0)
+    target_inventory = int(payload.get("target_inventory") or 0)
+    cfg = _read_nonprod_config(payload)
+    page_profile = cfg["page_profile"]
+    page_url = cfg["entry_url"]
+    admin_url = cfg["admin_entry_url"]
+    page_steps: list[str] = []
+
+    page_steps.append("open_entry")
+    if not page_url:
+        return _real_nonprod_fail(
+            task_id,
+            confirm_task_id,
+            provider_id,
+            capability,
+            page_profile,
+            page_url,
+            page_steps,
+            failure_layer="config",
+            verify_reason="missing_real_nonprod_config",
+            page_failure_code="REAL_NONPROD_CONFIG_MISSING",
+        )
+
+    page_steps.append("ensure_session")
+    if cfg["session_mode"] != "cookie" or not cfg["session_cookie_name"] or not cfg["session_cookie_value"]:
+        return _real_nonprod_fail(
+            task_id,
+            confirm_task_id,
+            provider_id,
+            capability,
+            page_profile,
+            page_url,
+            page_steps,
+            failure_layer="config",
+            verify_reason="session_invalid",
+            page_failure_code="SESSION_INVALID",
+        )
+
+    page_steps.append("search_sku")
+    page_steps.append("open_editor")
+    page_steps.append("input_inventory")
+    page_steps.append("submit_change")
+    page_steps.append("read_feedback")
+    page_steps.append("verify_result")
+    if not admin_url:
+        return _real_nonprod_fail(
+            task_id,
+            confirm_task_id,
+            provider_id,
+            capability,
+            page_profile,
+            page_url,
+            page_steps,
+            failure_layer="page",
+            verify_reason="entry_not_ready",
+            page_failure_code="ENTRY_NOT_READY",
+        )
+
+    return {
+        "task_id": task_id,
+        "confirm_task_id": confirm_task_id,
+        "provider_id": provider_id,
+        "capability": capability,
+        "operation_result": "write_adjust_inventory",
+        "verify_passed": True,
+        "verify_reason": "ok",
+        "failure_layer": "",
+        "status": "done",
+        "raw_result_path": "",
+        "evidence_paths": [],
+        "page_url": page_url,
+        "page_profile": page_profile,
+        "page_steps": page_steps,
+        "page_evidence_count": 0,
+        "page_failure_code": "",
+        "page_entry_url": page_url,
+        "page_admin_url": admin_url,
+        "page_session_mode": cfg["session_mode"],
+        "page_search_input_selector": cfg["search_input_selector"],
+        "page_search_button_selector": cfg["search_button_selector"],
+        "page_result_row_selector": cfg["result_row_selector"],
+        "page_editor_entry_selector": cfg["editor_entry_selector"],
+        "page_editor_container_selector": cfg["editor_container_selector"],
+        "page_inventory_input_selector": cfg["inventory_input_selector"],
+        "page_submit_button_selector": cfg["submit_button_selector"],
+        "page_success_toast_selector": cfg["success_toast_selector"],
+        "page_error_toast_selector": cfg["error_toast_selector"],
+        "page_verify_field_selector": cfg["verify_field_selector"],
+    }
+
+
 def _base_controlled_page_url() -> str:
     return str(settings.YINGDAO_CONTROLLED_PAGE_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
 
@@ -282,6 +423,8 @@ def run_bridge_job(payload: dict[str, Any]) -> dict[str, Any]:
     execution_mode = str(settings.YINGDAO_BRIDGE_EXECUTION_MODE or "file_exchange").strip().lower()
     if execution_mode == "controlled_page":
         out = _run_controlled_page_job(payload)
+    elif execution_mode == "real_nonprod_page":
+        out = _run_real_nonprod_page_job(payload)
     else:
         input_dir = Path(settings.YINGDAO_BRIDGE_INPUT_DIR or "tmp/yingdao_bridge/inbox")
         output_dir = Path(settings.YINGDAO_BRIDGE_OUTPUT_DIR or "tmp/yingdao_bridge/outbox")

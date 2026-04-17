@@ -182,10 +182,27 @@ class Settings(BaseSettings):
     YINGDAO_BRIDGE_WAIT_TIMEOUT_S: int = 20
     YINGDAO_BRIDGE_POLL_INTERVAL_MS: int = 200
     # P7.1 PoC — controlled page minimal execution chain (still non-production).
-    # Allowed: file_exchange | controlled_page
+    # Allowed: file_exchange | controlled_page | real_nonprod_page
     YINGDAO_BRIDGE_EXECUTION_MODE: str = "file_exchange"
     YINGDAO_CONTROLLED_PAGE_BASE_URL: str = "http://127.0.0.1:8000"
     YINGDAO_CONTROLLED_PAGE_PROFILE: str = "internal_inventory_adjust_v1"
+    YINGDAO_REAL_NONPROD_PAGE_BASE_URL: str = "http://127.0.0.1:18081"
+    YINGDAO_REAL_NONPROD_PAGE_PROFILE: str = "real_nonprod_page"
+    YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL: str = "http://127.0.0.1:18081/login"
+    YINGDAO_REAL_NONPROD_PAGE_ADMIN_ENTRY_URL: str = "http://127.0.0.1:18081/admin"
+    YINGDAO_REAL_NONPROD_PAGE_SESSION_MODE: str = "cookie"
+    YINGDAO_REAL_NONPROD_PAGE_SESSION_COOKIE_NAME: str = "nonprod_stub_session"
+    YINGDAO_REAL_NONPROD_PAGE_SESSION_COOKIE_VALUE: str = "admin-session"
+    YINGDAO_REAL_NONPROD_PAGE_SEARCH_INPUT_SELECTOR: str = 'input[name="sku"]'
+    YINGDAO_REAL_NONPROD_PAGE_SEARCH_BUTTON_SELECTOR: str = 'button[type="submit"]'
+    YINGDAO_REAL_NONPROD_PAGE_RESULT_ROW_SELECTOR: str = "table"
+    YINGDAO_REAL_NONPROD_PAGE_EDITOR_ENTRY_SELECTOR: str = "/admin/inventory/adjust?sku=A001"
+    YINGDAO_REAL_NONPROD_PAGE_EDITOR_CONTAINER_SELECTOR: str = ".card"
+    YINGDAO_REAL_NONPROD_PAGE_INVENTORY_INPUT_SELECTOR: str = 'input[name="delta"]'
+    YINGDAO_REAL_NONPROD_PAGE_SUBMIT_BUTTON_SELECTOR: str = 'button[type="submit"]'
+    YINGDAO_REAL_NONPROD_PAGE_SUCCESS_TOAST_SELECTOR: str = ".msg-ok"
+    YINGDAO_REAL_NONPROD_PAGE_ERROR_TOAST_SELECTOR: str = ".msg-err"
+    YINGDAO_REAL_NONPROD_PAGE_VERIFY_FIELD_SELECTOR: str = 'a[href^="/admin/inventory?sku="]'
 
     class Config:
         env_file = ".env"
