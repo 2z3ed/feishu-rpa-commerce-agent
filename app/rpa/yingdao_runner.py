@@ -6,9 +6,16 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from http.cookiejar import CookieJar
 from typing import Any
 
+from app.bridge.yingdao_local_bridge import (
+    build_yingdao_input_payload,
+    read_yingdao_output_file,
+    wait_for_yingdao_output,
+    write_yingdao_input_file,
+)
 from app.core.config import settings
 
 
@@ -254,8 +261,64 @@ def _run_real_nonprod_stub_flow(payload: dict[str, Any], client: Any | None = No
 
 def run_yingdao_adjust_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     """Call local Yingdao bridge and return normalized result."""
-    if str(settings.YINGDAO_BRIDGE_EXECUTION_MODE or "").strip().lower() == "real_nonprod_page":
-        return _run_real_nonprod_stub_flow(payload, client=payload.get("client"))
+    execution_mode = str(settings.YINGDAO_BRIDGE_EXECUTION_MODE or "").strip().lower()
+    if execution_mode == "real_nonprod_page":
+        run_id = str(payload.get("run_id") or payload.get("task_id") or "").strip()
+        if not run_id:
+            run_id = str(payload.get("confirm_task_id") or "").strip() or "run-unknown"
+        bridge_payload = build_yingdao_input_payload(
+            run_id=run_id,
+            action="warehouse.adjust_inventory",
+            sku=str(payload.get("sku") or "").strip().upper(),
+            warehouse=str(payload.get("warehouse") or "MAIN").strip(),
+            delta=int(payload.get("delta") or 0),
+            target_inventory=int(payload.get("target_inventory") or 0),
+            entry_url=str(payload.get("entry_url") or settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or "").strip(),
+            login_url=str(payload.get("login_url") or settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or "").strip(),
+            session_mode=str(payload.get("session_mode") or settings.YINGDAO_REAL_NONPROD_PAGE_SESSION_MODE or "cookie").strip(),
+            selectors=dict(payload.get("selectors") or {
+                "search_input_selector": settings.YINGDAO_REAL_NONPROD_PAGE_SEARCH_INPUT_SELECTOR,
+                "search_button_selector": settings.YINGDAO_REAL_NONPROD_PAGE_SEARCH_BUTTON_SELECTOR,
+                "result_row_selector": settings.YINGDAO_REAL_NONPROD_PAGE_RESULT_ROW_SELECTOR,
+                "editor_entry_selector": settings.YINGDAO_REAL_NONPROD_PAGE_EDITOR_ENTRY_SELECTOR,
+                "editor_container_selector": settings.YINGDAO_REAL_NONPROD_PAGE_EDITOR_CONTAINER_SELECTOR,
+                "inventory_input_selector": settings.YINGDAO_REAL_NONPROD_PAGE_INVENTORY_INPUT_SELECTOR,
+                "submit_button_selector": settings.YINGDAO_REAL_NONPROD_PAGE_SUBMIT_BUTTON_SELECTOR,
+                "success_toast_selector": settings.YINGDAO_REAL_NONPROD_PAGE_SUCCESS_TOAST_SELECTOR,
+                "error_toast_selector": settings.YINGDAO_REAL_NONPROD_PAGE_ERROR_TOAST_SELECTOR,
+                "verify_field_selector": settings.YINGDAO_REAL_NONPROD_PAGE_VERIFY_FIELD_SELECTOR,
+            }),
+            evidence_dir=str(payload.get("evidence_dir") or "tmp/evidence"),
+            fail_mode=str(payload.get("fail_mode") or payload.get("page_failure_mode") or "").strip(),
+        )
+        write_yingdao_input_file(bridge_payload)
+        out = wait_for_yingdao_output(run_id)
+        _ = read_yingdao_output_file(run_id)
+        return {
+            "task_id": str(payload.get("task_id") or run_id),
+            "confirm_task_id": str(payload.get("confirm_task_id") or ""),
+            "provider_id": str(payload.get("provider_id") or "odoo"),
+            "capability": str(payload.get("capability") or "warehouse.adjust_inventory"),
+            "rpa_vendor": "page_executor_shim",
+            "execution_backend": "page_executor_baseline",
+            "executor_mode": "shim",
+            "rpa_runtime": "none",
+            "operation_result": str(out.get("operation_result") or "write_adjust_inventory_bridge_failed"),
+            "verify_passed": bool(out.get("verify_passed")),
+            "verify_reason": str(out.get("verify_reason") or ""),
+            "failure_layer": str(out.get("failure_layer") or ""),
+            "status": "done" if out.get("verify_passed") else "failed",
+            "raw_result_path": str((Path("tmp/yingdao_bridge/outbox") / f"{run_id}.output.json").as_posix()),
+            "evidence_paths": [],
+            "page_url": str(payload.get("entry_url") or settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or ""),
+            "page_profile": "real_nonprod_page",
+            "page_steps": list(out.get("page_steps") or []),
+            "page_evidence_count": int(out.get("page_evidence_count") or 0),
+            "page_failure_code": str(out.get("page_failure_code") or ""),
+            "old_inventory": int(out.get("old_inventory") or payload.get("old_inventory") or 0),
+            "new_inventory": int(out.get("new_inventory") or payload.get("target_inventory") or 0),
+            "screenshot_paths": list(out.get("screenshot_paths") or []),
+        }
     base_url = str(settings.YINGDAO_BRIDGE_BASE_URL or "http://127.0.0.1:17891").rstrip("/")
     req = urllib.request.Request(
         f"{base_url}/run",
