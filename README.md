@@ -56,6 +56,10 @@
 - P71：受控页面最小执行链
 - P72：更像真实后台的受控验证
 - P73：单动作治理主线加固
+- P93：影刀 real-runtime success 总演练与阶段收口（`warehouse.adjust_inventory`）
+  - real-runtime success 演练通过
+  - done / outbox / evidence（runtime-result 兜底）已成立
+  - 后移项：failure 分支、真实截图增强、incoming latest-file 临时方案回收
 
 ### 当前正在推进的主线
 
