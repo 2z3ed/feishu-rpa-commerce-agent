@@ -1,564 +1,533 @@
 # AGENTS.md
 
-> 本文件是本仓库对编码智能体（如 Codex）的**强约束执行规范**。  
-> 本文件中的范围、边界、流程、数据结构、状态机、RAG 策略、飞书交互、安全要求、测试矩阵一旦定义，即视为冻结。  
-> 除非用户明确要求修改，否则不得擅自扩展、删减、替换。
+> 本文件是本仓库对编码智能体（如 Codex / Cursor / OpenCode）的强约束执行规范。
+> 当前仓库不是“大而全平台”开发阶段，而是“最小闭环收口阶段”。
+> 除非用户明确要求修改，否则不得擅自扩展业务范围、改写主线、替换核心叙事。
 
 ---
 
-# 1. 项目定位
+# 0. 当前阶段唯一目标
+
+本仓库当前唯一目标不是继续铺大平台，不是继续扩四岗位，不是继续加第二第三平台。
+
+当前阶段唯一目标是：
+
+> 做出一个“飞书入口 + 任务留痕 + 高风险确认 + 执行层 + 结果回写”的最小可演示闭环，
+> 让项目能面试讲清楚、能本地演示、能通过 coding agent 稳定推进。
+
+这是一个“业务闭环优先”的阶段，不是“平台能力铺满”的阶段。
+
+---
+
+# 1. 当前项目定位
 
 ## 1.1 项目名称
-飞书自然语言驱动的电商后台智能助手
+Feishu RPA Commerce Agent
 
-## 1.2 项目目标
-本项目是一个**业务可落地的电商后台智能助手**，不是问答机器人，不是研究型 Agent Demo，不是多智能体实验项目。
+## 1.2 当前阶段项目本质
+这是一个面向电商后台自动化的 AI 应用 / Agent 落地项目。
 
-系统目标：
+但在当前阶段，它不是完整平台，不追求覆盖全部后台岗位；
+它首先要证明一件事：
 
-- 用户在飞书中发送自然语言命令
-- 系统将命令解析为结构化任务
-- 系统通过 LangGraph 编排主流程
-- 系统通过 RAG 检索规则 / FAQ / 历史案例 / 历史任务
-- 系统路由到 WooCommerce、Odoo、Chatwoot
-- 系统采用 **RPA 主执行 + API 辅助执行**
-- 系统将结果通过：
-  - 飞书消息
-  - 飞书卡片
-  - 飞书多维表格
-  进行回传与沉淀
+- 飞书可以作为业务入口
+- 自然语言可以进入任务系统
+- 高风险动作不能直接执行，必须先确认
+- 执行层可以调用 mock / API / RPA
+- 结果可以回写并留痕
+- 整条链路可观测、可复盘、可演示
 
-## 1.3 项目本质
-这是一个**电商后台自动化平台**，目标是替代重复性后台工作，而不是做聊天体验本身。
+## 1.3 当前阶段对外主叙事
+当前阶段对外主叙事固定为：
+
+> 用户在飞书发起一个高风险后台动作，
+> 系统将自然语言转成任务，
+> 进入任务状态机，
+> 通过飞书确认卡片做人机确认，
+> 确认后进入执行层，
+> 最终将结果回写到飞书和任务系统中。
+
+不要把当前阶段叙事改写成：
+- 四岗位全覆盖平台
+- 多平台统一运营中台
+- 多智能体实验项目
+- 泛化型 Agent 框架
 
 ---
 
-# 2. 范围边界
+# 2. 当前阶段唯一主线
 
-## 2.1 In Scope（必须实现）
-本项目只覆盖以下 4 个岗位：
+## 2.1 主故事冻结
+当前阶段唯一主故事冻结为：
 
-1. 产品
-2. 仓库
-3. 客服
-4. 财务
+- `product.update_price`
+- `system.confirm_task`
 
-并且必须同时实现以下能力：
+也就是：
 
-- 飞书自然语言消息入口
-- 飞书消息回执
-- 飞书卡片发送
+1. 用户在飞书发起改价请求
+2. 系统识别为高风险动作
+3. 原任务进入 `awaiting_confirmation`
+4. 系统发送飞书确认卡片
+5. 用户点击确认 / 拒绝
+6. 系统触发 `system.confirm_task` 或拒绝分支
+7. 执行层返回结果
+8. `/tasks` 与 `/steps` 可查
+9. 飞书消息 / 卡片显示最终状态
+10. 如已有稳定基础，可选写入 Bitable 台账
+
+## 2.2 当前阶段次要执行验证分支
+允许存在一个“执行层验证分支”：
+
+- `warehouse.adjust_inventory`
+
+它的角色是：
+- 验证 Yingdao / bridge / real_nonprod_page / mock executor / 真点击链路
+- 证明“执行层可以接 RPA”
+
+但它不是当前阶段对外主故事，
+不得抢占 `product.update_price + confirm card` 这条主线。
+
+---
+
+# 3. 当前阶段 In Scope（必须实现）
+
+当前阶段只要求实现以下能力，不得擅自扩大：
+
+## 3.1 飞书入口层
+必须实现：
+
+- 飞书消息事件接收
+- 基本文本回执
+- 飞书确认卡片发送
 - 飞书卡片交互回调
-- 飞书多维表格任务台账
-- LangGraph 主编排
-- RAG（真实参与业务）
-- WooCommerce 接入
-- Odoo 接入
-- Chatwoot 接入
-- RPA 主执行链路
-- API 辅助执行链路
-- 任务状态机
-- 幂等控制
-- 重试机制
-- 截图 / 附件归档
-- README
-- 可演示脚本
+- 至少一种高风险动作从飞书进入任务系统
 
-## 2.2 Out of Scope（禁止扩展）
-以下内容一律不做，禁止编码智能体擅自加入：
+## 3.2 任务系统
+必须实现：
 
-- 小红书
-- 美工 / 抠图 / 图生图 / LoRA
-- UI-TARS
-- OmniParser
-- deepagents
-- 多智能体协作
-- 审批流
-- 支付网关全链路
-- 银行流水
-- 税务系统
-- 发票系统
-- 多租户
-- K8s / 生产级集群
-- 与本项目无关的研究型能力
-- V3 规划
-- “以后可能要加”的内容先不实现
+- message_id 幂等
+- task_records
+- task_steps
+- Celery 异步执行
+- `/api/v1/tasks`
+- `/api/v1/tasks/{task_id}`
+- `/api/v1/tasks/{task_id}/steps`
+
+## 3.3 业务动作
+当前阶段只强制要求这两个动作稳定成立：
+
+- `product.update_price`
+- `system.confirm_task`
+
+说明：
+- `product.update_price` 是高风险动作主故事
+- `system.confirm_task` 是确认放行入口
+- 不要求当前阶段同时做满其它业务动作
+
+## 3.4 状态流转
+至少必须稳定支持这些状态：
+
+- `pending`
+- `processing`
+- `awaiting_confirmation`
+- `succeeded`
+- `failed`
+- `cancelled` 或 `rejected`
+
+## 3.5 执行层
+当前阶段执行层允许以下实现之一或组合：
+
+- mock 执行
+- API 执行
+- Yingdao bridge 文件链执行
+- Yingdao 真点击执行
+
+但要求：
+
+- 执行层必须是“可插拔”的
+- 不允许把执行层写死成只有一种后端
+- 当前主故事优先保证闭环稳定，不优先追求执行后端花样
+
+## 3.6 结果回写
+必须至少回写到以下两个位置：
+
+1. 飞书消息或飞书卡片
+2. 任务系统（`task_records` + `task_steps`）
+
+Bitable 在当前阶段是“可选增强项”，不是唯一验收条件。
+如果仓库里已有稳定 Bitable 写入基础，可以继续复用；
+如果当前改动会拖慢主线，不要为追求 Bitable 完整度破坏主线。
 
 ---
 
-# 3. 固定技术栈
+# 4. 当前阶段 Out of Scope（禁止扩展）
 
-## 3.1 后端
+以下内容当前阶段一律不做，禁止编码智能体擅自加入：
+
+## 4.1 禁止扩平台
+- 不扩 Odoo 主线
+- 不扩 Chatwoot 主线
+- 不扩第二、第三个业务平台
+- 不做多平台统一运营大平台
+
+## 4.2 禁止扩岗位
+- 不追求四岗位全覆盖
+- 不为了“完整”补产品/仓库/客服/财务所有动作
+- 不为了“好看”加大量只读动作
+
+## 4.3 禁止扩能力
+- 不做多智能体协作
+- 不做 deepagents 主框架
+- 不做审批流系统
+- 不做复杂双向同步 Bitable 平台
+- 不做生产级多租户
+- 不做 K8s / 集群 / 正式上线架构
+- 不做与当前最小闭环无关的 RAG 扩展
+- 不做无明确业务价值的抽象重构
+
+## 4.4 禁止改写主叙事
+禁止把当前阶段主叙事改写成：
+
+- “完整飞书 ERP 中台”
+- “全平台统一 Agent 系统”
+- “四岗位自动化平台全部落地”
+- “多智能体工作流实验”
+- “先补平台能力，闭环以后再说”
+
+---
+
+# 5. 当前阶段固定技术栈
+
+## 5.1 后端
 - Python
 - FastAPI
 
-## 3.2 编排
-- LangGraph
-- 禁止使用 deepagents 作为主框架
+## 5.2 编排
+- LangGraph（保留现有主链）
+- 禁止引入 deepagents 替代主链
 
-## 3.3 数据存储
-- PostgreSQL（正式）
-- SQLite（仅限本地临时兼容，不得作为正式方案）
+## 5.3 存储
+- SQLite 允许继续作为当前本地演示与开发方案
+- PostgreSQL 可保留兼容，但当前阶段不强制迁移
+- 不允许为了“架构更正规”强行切库并打断主线
 
-## 3.4 ORM
-- SQLAlchemy
-
-## 3.5 向量库
-- Milvus
-
-## 3.6 异步任务
+## 5.4 异步任务
 - Celery
 - Redis
 
-## 3.7 配置
+## 5.5 ORM / 数据层
+- SQLAlchemy 或当前仓库已有数据访问层
+- 不允许为“统一风格”大改任务表/步骤表结构
+
+## 5.6 配置
 - `.env`
 - `.env.example`
 
-## 3.8 日志
-- 结构化日志（JSON 或等价结构）
+## 5.7 日志
+- 结构化日志优先
+- 至少要保证任务创建、确认、执行、失败可查
 
-## 3.9 时区
+## 5.8 时区
 - Asia/Shanghai
 
-## 3.10 执行原则
-- **RPA 是主执行链路**
-- **API 是辅助执行链路**
-- 至少一个动作必须支持：
-  - API 实现
-  - RPA 实现
-  - API_then_RPA_verify 实现
-
 ---
 
-# 4. 平台接入范围
+# 6. 当前阶段业务动作冻结
 
-## 4.1 飞书
-必须实现：
-
-- 消息事件接收
-- 文本回执
-- 图片 / 文件回执
-- 飞书卡片发送
-- 飞书卡片交互回调
-- 飞书多维表格写入与更新
-
-## 4.2 WooCommerce
-作为主业务平台，必须至少实现：
-
-- 商品查询
-- 订单查询
-- 改价
-- 上架 / 下架
-- 商品 / 订单导出
-
-## 4.3 Odoo
-作为 ERP / 第二平台，必须至少实现：
-
-- 库存查询
-- 产品基础信息查询
-- 与 Woo 商品 / 库存对照
-
-## 4.4 Chatwoot
-作为客服平台 / 第三平台，必须至少实现：
-
-- 最近会话查询
-- 会话摘要查询
-- 最近消息查询
-- 会话 / 订单联动查询
-
----
-
-# 5. 四岗位业务动作冻结
-
----
-
-## 5.1 产品岗
-
-### 5.1.1 固定 intent 列表
-- `product.query_sku_status`
-- `product.update_price`
-- `product.publish_product`
-- `product.unpublish_product`
-- `product.query_product_profile`
-- `product.export_product_list`
-- `product.compare_woo_odoo_product`
-- `product.batch_update_prices`
-
-### 5.1.2 每个 intent 的 Schema
-
-#### `product.query_sku_status`
-必填：
-- `sku`
-
-可选：
-- `platform`
-
-默认：
-- `platform=auto`
-
-#### `product.update_price`
-必填：
+## 6.1 当前唯一强制稳定动作
+### `product.update_price`
+最小参数要求：
 - `sku`
 - `target_price`
 
 可选：
+- `platform`
 - `currency`
-- `platform`
 - `reason`
 
 默认：
+- `platform=woo`
 - `currency=CNY`
-- `platform=woo`
 
-#### `product.publish_product`
-必填：
-- `sku`
+语义冻结：
+- 这是高风险动作
+- 默认 `confirm_required=true`
+- 不允许直接无确认写入成功态
+- 必须经过确认链或明确的拒绝链
+
+### `system.confirm_task`
+最小参数要求：
+- `target_task_id`
 
 可选：
-- `platform`
+- `confirm_action`
 
 默认：
-- `platform=woo`
+- `confirm_action=confirm`
 
-#### `product.unpublish_product`
-必填：
+语义冻结：
+- 只能用于确认 / 拒绝一个已进入 `awaiting_confirmation` 的任务
+- 不允许承担普通业务动作
+- 不允许重写成新的主业务入口
+
+## 6.2 当前允许保留的执行验证动作
+### `warehouse.adjust_inventory`
+它当前只作为执行层验证动作使用。
+
+允许用于：
+- Yingdao bridge
+- mock executor
+- real_nonprod_page
+- P90 / P91 验证
+
+禁止用于：
+- 抢占对外主故事
+- 改写当前飞书最小闭环主线
+
+---
+
+# 7. 飞书交互冻结
+
+## 7.1 飞书消息入口
+当前阶段必须支持：
+- 用户在飞书发文本消息
+- 系统能识别出高风险改价请求
+- 系统创建任务并回执最小文本结果
+
+## 7.2 飞书确认卡片
+当前阶段必须实现：
+- 针对 `product.update_price` 发送确认卡片
+- 卡片至少展示：
+  - `task_id`
+  - `sku`
+  - `target_price`
+  - 风险提示
+  - 操作按钮
+
+## 7.3 飞书卡片按钮
+至少支持两个动作：
+- Confirm / 确认执行
+- Reject / 取消或拒绝
+
+## 7.4 飞书卡片回调
+回调语义冻结：
+- Confirm -> 触发 `system.confirm_task`
+- Reject -> 原任务进入 `cancelled` / `rejected`
+- 不允许卡片回调绕过任务系统直接写业务结果
+
+## 7.5 飞书最终反馈
+执行完成后必须至少做到以下之一：
+- 更新原卡片状态
+- 发送一条最终文本消息
+- 两者都做更好
+
+但原则不变：
+- 用户必须能从飞书侧看到最终状态
+- 不允许只在数据库里成功，飞书无反馈
+
+---
+
+# 8. 任务状态机冻结
+
+## 8.1 原任务 `product.update_price`
+固定流转：
+
+`pending -> processing -> awaiting_confirmation -> succeeded / failed / cancelled`
+
+## 8.2 确认任务 `system.confirm_task`
+固定流转：
+
+`pending -> processing -> succeeded / failed`
+
+## 8.3 拒绝分支
+若用户点击拒绝：
+- 原任务必须进入 `cancelled` 或 `rejected`
+- `/steps` 中必须留下拒绝步骤
+- 飞书侧必须可见拒绝结果
+
+## 8.4 幂等要求
+以下场景必须考虑幂等：
+
+- 重复消息
+- 重复点击确认
+- 重复点击拒绝
+- 同一任务既被确认又被取消的竞态
+
+当前阶段不要求最复杂的并发治理，
+但至少要避免明显重复执行。
+
+---
+
+# 9. 执行层冻结
+
+## 9.1 执行层原则
+执行层是“手”，不是“大脑”。
+
+大脑负责：
+- 解析
+- 任务创建
+- 确认链
+- 状态流转
+
+执行层负责：
+- 实际动作执行
+- 返回结果
+- 提供证据
+- 提供失败原因
+
+## 9.2 当前允许的执行后端
+允许存在：
+
+- `mock`
+- `api`
+- `yingdao_bridge_file`
+- `yingdao_real_click`
+
+但注意：
+- 当前阶段不能为了某个后端重写全部主链
+- 当前阶段优先保证 `product.update_price` 闭环成立
+- P90 / P91 属于执行层验证子线，不得反向主导整个仓库结构
+
+## 9.3 Yingdao 相关边界
+Yingdao 相关实现允许继续推进，但必须遵守：
+
+- 不改写飞书主故事
+- 不把 `warehouse.adjust_inventory` 变成当前唯一主线
+- 不因真点击验证破坏 `/tasks`、`/steps`、confirm 语义
+- 不伪造“真点击已完成”
+- mock / bridge / real click 必须明确区分
+
+---
+
+# 10. RAG 策略冻结
+
+当前阶段：
+- RAG 不是唯一验收核心
+- 不要求当前所有动作都接入真实 RAG
+- 不允许为了补 RAG 而打断飞书最小闭环
+
+允许：
+- 保留现有 RAG 结构
+- 为后续阶段预留接口
+
+禁止：
+- 扩写大量规则库 / FAQ / 向量库逻辑
+- 把当前阶段目标改写成“先把 RAG 做完整”
+- 让 RAG 成为阻塞飞书卡片闭环的前置条件
+
+---
+
+# 11. Bitable 策略冻结
+
+当前阶段 Bitable 不是唯一必做项，而是“可选增强项”。
+
+## 11.1 若已有稳定基础
+允许复用当前 append 台账能力。
+
+## 11.2 当前阶段推荐最小字段
+若写入 Bitable，优先只保留：
+- `task_id`
+- `intent`
 - `sku`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `product.query_product_profile`
-必填：
-- `sku`
-
-可选：
-- `platform`
-
-默认：
-- `platform=auto`
-
-#### `product.export_product_list`
-必填：
-- `date_from`
-- `date_to`
-
-可选：
 - `status`
-- `platform`
+- `result_summary`
+- `created_at`
+- `updated_at`
 
-默认：
-- `status=all`
-- `platform=woo`
-
-#### `product.compare_woo_odoo_product`
-必填：
-- `sku`
-
-可选：无
-
-默认：无
-
-#### `product.batch_update_prices`
-必填：
-- `source_table`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
+## 11.3 禁止事项
+- 不做复杂双向同步
+- 不把 Bitable 做成主数据库
+- 不为 Bitable 字段完美设计而拖慢主线
 
 ---
 
-## 5.2 仓库岗
+# 12. 测试与演示冻结
 
-### 5.2.1 固定 intent 列表
-- `warehouse.query_pending_orders`
-- `warehouse.query_order_status`
-- `warehouse.mark_order_processed`
-- `warehouse.mark_order_shipped`
-- `warehouse.fill_tracking_no`
-- `warehouse.query_inventory`
-- `warehouse.compare_inventory`
-- `warehouse.export_picking_list`
+## 12.1 当前阶段必须可演示
+至少要能演示：
+1. 飞书发起高风险改价
+2. 系统进入 `awaiting_confirmation`
+3. 飞书确认卡片出现
+4. 用户点击确认或拒绝
+5. 系统执行并回写结果
+6. `/tasks` 与 `/steps` 可查
 
-### 5.2.2 每个 intent 的 Schema
+## 12.2 当前阶段必须至少覆盖的测试
+至少要有：
 
-#### `warehouse.query_pending_orders`
-必填：无
+- 一个 `product.update_price` 进入 `awaiting_confirmation` 的测试
+- 一个 `system.confirm_task` 成功测试
+- 一个拒绝分支测试
+- 一个重复点击或幂等测试
+- 如果执行层接通，再补一个 success path / 一个 failure path
 
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `warehouse.query_order_status`
-必填：
-- `order_id`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `warehouse.mark_order_processed`
-必填：
-- `order_id`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `warehouse.mark_order_shipped`
-必填：
-- `order_id`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `warehouse.fill_tracking_no`
-必填：
-- `order_id`
-- `tracking_no`
-
-可选：
-- `carrier`
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `warehouse.query_inventory`
-必填：
-- `sku`
-
-可选：
-- `platform`
-
-默认：
-- `platform=odoo`
-
-#### `warehouse.compare_inventory`
-必填：
-- `sku`
-
-可选：无
-
-默认：无
-
-#### `warehouse.export_picking_list`
-必填：
-- `date_from`
-- `date_to`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
+## 12.3 测试原则
+- 优先补主故事测试
+- 不为了追求覆盖率去补大量边缘动作
+- 不允许跳过主故事而只测底层工具函数
 
 ---
 
-## 5.3 客服岗
+# 13. README / 文档策略冻结
 
-### 5.3.1 固定 intent 列表
-- `customer.query_order_status`
-- `customer.list_recent_conversations`
-- `customer.get_conversation_summary`
-- `customer.get_last_customer_message`
-- `customer.query_refund_policy`
-- `customer.query_logistics_status`
-- `customer.link_conversation_order`
-- `customer.flag_abnormal_conversation`
+当前阶段 README 和文档必须围绕“最小业务闭环”组织。
 
-### 5.3.2 每个 intent 的 Schema
+必须强调：
+- 飞书入口
+- 高风险确认
+- 执行层
+- 任务留痕
+- 可演示闭环
 
-#### `customer.query_order_status`
-必填：
-- `order_id`
-
-可选：
-- `platform`
-
-默认：
-- `platform=woo`
-
-#### `customer.list_recent_conversations`
-必填：
-- `limit`
-
-可选：无
-
-默认：
-- `limit=5`
-
-#### `customer.get_conversation_summary`
-必填：
-- `conversation_id`
-
-可选：无
-
-默认：无
-
-#### `customer.get_last_customer_message`
-必填：
-- `conversation_id`
-
-可选：无
-
-默认：无
-
-#### `customer.query_refund_policy`
-必填：
-- `topic`
-
-可选：无
-
-默认：
-- `topic=refund`
-
-#### `customer.query_logistics_status`
-必填：
-- `order_id`
-
-可选：无
-
-默认：无
-
-#### `customer.link_conversation_order`
-必填：
-- `conversation_id`
-
-可选：
-- `order_id`
-- `customer_email`
-- `customer_phone`
-
-默认：无
-
-#### `customer.flag_abnormal_conversation`
-必填：
-- `conversation_id`
-- `reason`
-
-可选：无
-
-默认：无
+不要再把 README 主叙事写成：
+- 四岗位全量平台
+- 全平台统一能力图谱
+- 复杂中台路线图
 
 ---
 
-## 5.4 财务岗
+# 14. 编码智能体执行规则
 
-### 5.4.1 固定 intent 列表
-- `finance.query_daily_order_summary`
-- `finance.query_sales_summary`
-- `finance.query_refund_cancel_summary`
-- `finance.export_daily_report`
-- `finance.reconcile_order_erp`
-- `finance.write_report_to_bitable`
-- `finance.send_daily_report_card`
-- `finance.explain_anomaly`
+## 14.1 每轮开发的默认顺序
+除非用户明确要求，否则开发顺序固定为：
 
-### 5.4.2 每个 intent 的 Schema
+1. 先保证主故事不被破坏
+2. 再补飞书确认卡片
+3. 再补卡片回调
+4. 再补结果回写
+5. 再补测试与演示
+6. 最后才补增强项（Bitable / Yingdao 验证 / RAG 等）
 
-#### `finance.query_daily_order_summary`
-必填：
-- `date`
+## 14.2 遇到冲突时的优先级
+若出现冲突，优先级固定为：
 
-可选：无
+1. 飞书最小业务闭环
+2. 任务状态机与幂等
+3. `/tasks` 与 `/steps`
+4. 执行层可插拔
+5. Bitable
+6. RAG
+7. 平台扩展
 
-默认：
-- `date=today`
+## 14.3 严禁行为
+编码智能体严禁：
 
-#### `finance.query_sales_summary`
-必填：
-- `date_from`
-- `date_to`
-
-可选：无
-
-默认：无
-
-#### `finance.query_refund_cancel_summary`
-必填：
-- `date_from`
-- `date_to`
-
-可选：无
-
-默认：无
-
-#### `finance.export_daily_report`
-必填：
-- `date`
-
-可选：
-- `format`
-
-默认：
-- `format=xlsx`
-
-#### `finance.reconcile_order_erp`
-必填：
-- `date_from`
-- `date_to`
-
-可选：无
-
-默认：无
-
-#### `finance.write_report_to_bitable`
-必填：
-- `date`
-
-可选：无
-
-默认：
-- `date=today`
-
-#### `finance.send_daily_report_card`
-必填：
-- `date`
-
-可选：无
-
-默认：
-- `date=today`
-
-#### `finance.explain_anomaly`
-必填：
-- `anomaly_id`
-
-可选：无
-
-默认：无
+- 擅自扩大范围
+- 擅自改写主故事
+- 把验证子线写成主线
+- 为了“更优雅”大重构
+- 为了“更完整”补四岗位全量动作
+- 为了“更像平台”扩 Odoo / Chatwoot / 第三平台
+- 把当前阶段写成研究型 Agent 项目
 
 ---
 
-# 6. 通用命令解析结构冻结
+# 15. 当前阶段一句话验收标准
 
-所有自然语言命令必须统一解析为以下结构：
+只有当下面这句话成立时，才算当前阶段通过：
 
-```json
-{
-  "role": "product | warehouse | customer | finance",
-  "intent": "string",
-  "platform": "woo | odoo | chatwoot | auto",
-  "execution_mode": "auto | api | rpa | api_then_rpa_verify",
-  "confirm_required": true,
-  "output_mode": "card | text | file | card+bitable",
-  "params": {},
-  "raw_text": "string",
-  "operator": "string",
-  "source": "feishu_message"
-}
+> 用户可以在飞书中发起一个高风险改价请求，系统会创建任务、进入确认态、发送确认卡片、在确认后进入执行层，并将最终结果稳定回写到飞书与任务系统中，且全过程可通过 `/tasks` 与 `/steps` 追踪。
+
+如果这句话还不成立，
+就不要继续扩平台、扩岗位、扩能力。

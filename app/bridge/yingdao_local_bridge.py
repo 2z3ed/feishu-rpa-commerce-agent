@@ -83,6 +83,70 @@ _PAGE_FAILURE_MAPPING: dict[str, dict[str, str]] = {
     },
 }
 
+_BRIDGE_INBOX_DIR = Path("tmp/yingdao_bridge/inbox")
+_BRIDGE_OUTBOX_DIR = Path("tmp/yingdao_bridge/outbox")
+
+
+def _bridge_input_path(run_id: str) -> Path:
+    return _BRIDGE_INBOX_DIR / f"{run_id}.input.json"
+
+
+def _bridge_output_path(run_id: str) -> Path:
+    return _BRIDGE_OUTBOX_DIR / f"{run_id}.output.json"
+
+
+def build_yingdao_input_payload(*, run_id: str, action: str, sku: str, warehouse: str, delta: int, target_inventory: int, entry_url: str, login_url: str, session_mode: str, selectors: dict[str, str], evidence_dir: str, fail_mode: str = "") -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "action": action,
+        "sku": sku,
+        "warehouse": warehouse,
+        "delta": delta,
+        "target_inventory": target_inventory,
+        "entry_url": entry_url,
+        "login_url": login_url,
+        "session_mode": session_mode,
+        "selectors": selectors,
+        "evidence_dir": evidence_dir,
+        "fail_mode": fail_mode,
+    }
+
+
+def write_yingdao_input_file(payload: dict[str, Any]) -> Path:
+    _BRIDGE_INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    run_id = str(payload.get("run_id") or "").strip()
+    if not run_id:
+        raise BridgeJobError(failure_layer="bridge_input_write_failed", message="missing_run_id")
+    fp = _bridge_input_path(run_id)
+    fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return fp
+
+
+def read_yingdao_output_file(run_id: str) -> dict[str, Any]:
+    fp = _bridge_output_path(run_id)
+    if not fp.exists():
+        raise FileNotFoundError(str(fp))
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8") or "{}")
+    except Exception as exc:
+        raise BridgeJobError(failure_layer="bridge_result_invalid_json", message=f"invalid_output_json:{exc}") from exc
+    if str(obj.get("run_id") or "") != run_id:
+        raise BridgeJobError(failure_layer="bridge_result_invalid_shape", message="run_id_mismatch")
+    return obj
+
+
+def wait_for_yingdao_output(run_id: str) -> dict[str, Any]:
+    timeout_s = max(int(settings.YINGDAO_BRIDGE_WAIT_TIMEOUT_S or 20), 1)
+    poll_interval = max(int(settings.YINGDAO_BRIDGE_POLL_INTERVAL_MS or 200), 50) / 1000.0
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            return read_yingdao_output_file(run_id)
+        except FileNotFoundError:
+            time.sleep(poll_interval)
+            continue
+    raise BridgeJobError(failure_layer="bridge_result_timeout", message=f"result_file_timeout run_id={run_id}")
+
 
 def _read_nonprod_config(payload: dict[str, Any]) -> dict[str, str]:
     page_profile = str(payload.get("page_profile") or settings.YINGDAO_REAL_NONPROD_PAGE_PROFILE or "real_nonprod_page")
@@ -426,10 +490,24 @@ def run_bridge_job(payload: dict[str, Any]) -> dict[str, Any]:
     elif execution_mode == "real_nonprod_page":
         out = _run_real_nonprod_page_job(payload)
     else:
-        input_dir = Path(settings.YINGDAO_BRIDGE_INPUT_DIR or "tmp/yingdao_bridge/inbox")
-        output_dir = Path(settings.YINGDAO_BRIDGE_OUTPUT_DIR or "tmp/yingdao_bridge/outbox")
-        _write_bridge_input(payload, input_dir=input_dir)
-        out = _wait_and_load_bridge_output(task_id, output_dir=output_dir)
+        input_fp = write_yingdao_input_file(
+            build_yingdao_input_payload(
+                run_id=task_id,
+                action=str(payload.get("capability") or "warehouse.adjust_inventory"),
+                sku=str(payload.get("sku") or "").strip().upper(),
+                warehouse=str(payload.get("warehouse") or "MAIN"),
+                delta=int(payload.get("delta") or 0),
+                target_inventory=int(payload.get("target_inventory") or 0),
+                entry_url=str(payload.get("entry_url") or settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or ""),
+                login_url=str(payload.get("login_url") or settings.YINGDAO_REAL_NONPROD_PAGE_ENTRY_URL or ""),
+                session_mode=str(payload.get("session_mode") or settings.YINGDAO_REAL_NONPROD_PAGE_SESSION_MODE or "cookie"),
+                selectors=dict(payload.get("selectors") or {}),
+                evidence_dir=str(payload.get("evidence_dir") or settings.RPA_EVIDENCE_BASE_DIR or "tmp/evidence"),
+                fail_mode=str(payload.get("fail_mode") or ""),
+            )
+        )
+        _ = input_fp
+        out = wait_for_yingdao_output(task_id)
     if not isinstance(out, dict):
         raise BridgeJobError(
             failure_layer="bridge_result_invalid_shape",

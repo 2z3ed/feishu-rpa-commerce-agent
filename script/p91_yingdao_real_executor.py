@@ -1,219 +1,133 @@
 #!/usr/bin/env python3
-"""Page executor baseline (shim), NOT Yingdao runtime.
-
-This script executes real page automation against self-hosted nonprod page via Playwright,
-but it does not start/call Yingdao runtime itself. It keeps P90 inbox/outbox contract.
-"""
 from __future__ import annotations
 
 import json
-import re
+import subprocess
+import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlunparse
 
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
-
+# P90 fixed bridge contract (left side)
 INBOX_DIR = Path("tmp/yingdao_bridge/inbox")
 OUTBOX_DIR = Path("tmp/yingdao_bridge/outbox")
 
+# Real Yingdao runtime side (right side)
+RUNTIME_ROOT = Path("/mnt/z/yingdao_bridge")
+RUNTIME_INCOMING_DIR = RUNTIME_ROOT / "incoming"
+RUNTIME_DONE_DIR = RUNTIME_ROOT / "done"
+RUNTIME_FAILED_DIR = RUNTIME_ROOT / "failed"
+RUNTIME_EVIDENCE_DIR = RUNTIME_ROOT / "evidence"
 
-def _load_input(fp: Path) -> dict[str, Any]:
-    return json.loads(fp.read_text(encoding="utf-8") or "{}")
-
-
-def _write_output(run_id: str, result: dict[str, Any]) -> Path:
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-    out_fp = OUTBOX_DIR / f"{run_id}.output.json"
-    out_fp.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return out_fp
+SHADOWBOT_EXE_WIN = r"Z:\ShadowBot\ShadowBot.exe"
 
 
-def _origin(url: str) -> str:
-    p = urlparse(url)
-    return urlunparse((p.scheme, p.netloc, "", "", "", ""))
+def _load_json(fp: Path) -> dict[str, Any]:
+    try:
+        return json.loads(fp.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return {}
 
 
-def _parse_inventory(html: str) -> int | None:
-    m = re.search(r"Current Inventory</th><td>(\d+)</td>", html)
-    if m:
-        return int(m.group(1))
-    m2 = re.search(r"写后库存:\s*(\d+)", html)
-    if m2:
-        return int(m2.group(1))
-    return None
+def _write_json(fp: Path, obj: dict[str, Any]) -> None:
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _base_result(payload: dict[str, Any]) -> dict[str, Any]:
+def _launch_shadowbot_once() -> None:
+    # Non-blocking launch; safe if already running.
+    subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            f"$p='{SHADOWBOT_EXE_WIN}'; if(Test-Path $p){{ Start-Process -FilePath $p | Out-Null }}",
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _base_failed(run_id: str, reason: str) -> dict[str, Any]:
     return {
-        "run_id": str(payload.get("run_id") or ""),
+        "run_id": run_id,
         "operation_result": "write_adjust_inventory_bridge_failed",
         "verify_passed": False,
-        "verify_reason": "",
-        "page_failure_code": "",
-        "failure_layer": "",
+        "verify_reason": reason,
+        "page_failure_code": "EXECUTOR_ERROR",
+        "failure_layer": "bridge_executor_failed",
         "page_steps": [],
         "page_evidence_count": 0,
-        "old_inventory": int(payload.get("old_inventory") or 0),
-        "new_inventory": int(payload.get("old_inventory") or 0),
+        "old_inventory": 0,
+        "new_inventory": 0,
         "screenshot_paths": [],
     }
 
 
+def _normalize_runtime_result(run_id: str, raw: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    # Runtime-side files may be either bridge-like object or custom detail object.
+    # Normalize back to P90 outbox contract.
+    page_steps = list(raw.get("page_steps") or [])
+    old_inventory = int(raw.get("old_inventory") or payload.get("old_inventory") or 0)
+    new_inventory = int(raw.get("new_inventory") or payload.get("target_inventory") or 0)
+    verify_passed = bool(raw.get("verify_passed", False))
+    operation_result = str(raw.get("operation_result") or ("write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"))
+
+    out = {
+        "run_id": run_id,
+        "operation_result": operation_result,
+        "verify_passed": verify_passed,
+        "verify_reason": str(raw.get("verify_reason") or ("" if verify_passed else "verify_fail")),
+        "page_failure_code": str(raw.get("page_failure_code") or ("" if verify_passed else "VERIFY_FAIL")),
+        "failure_layer": str(raw.get("failure_layer") or ("" if verify_passed else "verify_failed")),
+        "page_steps": page_steps,
+        "page_evidence_count": int(raw.get("page_evidence_count") or len(raw.get("screenshot_paths") or [])),
+        "old_inventory": old_inventory,
+        "new_inventory": new_inventory,
+        "screenshot_paths": list(raw.get("screenshot_paths") or []),
+    }
+    return out
+
+
+def _wait_runtime_result(run_id: str, timeout_s: int = 120) -> tuple[str, dict[str, Any]]:
+    done_fp = RUNTIME_DONE_DIR / f"{run_id}.done.json"
+    fail_fp = RUNTIME_FAILED_DIR / f"{run_id}.failed.json"
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if done_fp.exists():
+            return "done", _load_json(done_fp)
+        if fail_fp.exists():
+            return "failed", _load_json(fail_fp)
+        time.sleep(0.2)
+    return "timeout", {}
+
+
 def process_one(input_fp: Path) -> Path:
-    payload = _load_input(input_fp)
+    payload = _load_json(input_fp)
     run_id = str(payload.get("run_id") or input_fp.stem.replace(".input", ""))
-    entry_url = str(payload.get("entry_url") or "http://127.0.0.1:18081/login")
-    login_url = str(payload.get("login_url") or entry_url)
-    sku = str(payload.get("sku") or "A001").strip().upper()
-    delta = int(payload.get("delta") or 0)
-    target_inventory = int(payload.get("target_inventory") or 0)
-    fail_mode = str(payload.get("fail_mode") or "").strip().lower()
-    evidence_dir = Path(str(payload.get("evidence_dir") or "tmp/evidence"))
-    evidence_dir.mkdir(parents=True, exist_ok=True)
 
-    result = _base_result(payload)
-    result["run_id"] = run_id
-    steps: list[str] = []
-    shots: list[str] = []
+    for p in (RUNTIME_INCOMING_DIR, RUNTIME_DONE_DIR, RUNTIME_FAILED_DIR, RUNTIME_EVIDENCE_DIR):
+        p.mkdir(parents=True, exist_ok=True)
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+    # Map bridge inbox -> runtime incoming
+    runtime_in_fp = RUNTIME_INCOMING_DIR / f"{run_id}.input.json"
+    _write_json(runtime_in_fp, payload)
 
-            # open_entry
-            steps.append("open_entry")
-            page.goto(entry_url, wait_until="domcontentloaded", timeout=15000)
+    # Ensure runtime entry is launched.
+    _launch_shadowbot_once()
 
-            # ensure_session
-            steps.append("ensure_session")
-            page.fill('input[name="username"]', "admin")
-            page.fill('input[name="password"]', "badpass" if fail_mode == "session_invalid" else "admin123")
-            page.click('button[type="submit"]')
-            page.wait_for_load_state("domcontentloaded")
-            if fail_mode == "session_invalid" or "登录失败" in page.content():
-                shot = evidence_dir / f"{run_id}-session-invalid.png"
-                page.screenshot(path=str(shot), full_page=True)
-                shots.append(str(shot))
-                result.update(
-                    {
-                        "operation_result": "write_adjust_inventory_bridge_failed",
-                        "verify_passed": False,
-                        "verify_reason": "session_invalid",
-                        "page_failure_code": "SESSION_INVALID",
-                        "failure_layer": "config",
-                        "page_steps": steps,
-                        "page_evidence_count": len(shots),
-                        "screenshot_paths": shots,
-                    }
-                )
-                browser.close()
-                return _write_output(run_id, result)
+    state, runtime_raw = _wait_runtime_result(run_id)
+    if state == "timeout":
+        out = _base_failed(run_id, "bridge_request_timeout")
+        out["operation_result"] = "write_adjust_inventory_bridge_timeout"
+        out["failure_layer"] = "bridge_timeout"
+        out["page_failure_code"] = "PAGE_TIMEOUT"
+    else:
+        out = _normalize_runtime_result(run_id, runtime_raw, payload)
 
-            base = _origin(login_url)
-
-            # search_sku
-            steps.append("search_sku")
-            inv_url = f"{base}/admin/inventory?sku={sku}"
-            page.goto(inv_url, wait_until="domcontentloaded", timeout=15000)
-            html = page.content()
-            if fail_mode == "entry_not_ready" or "入口未就绪" in html:
-                shot = evidence_dir / f"{run_id}-entry-not-ready.png"
-                page.screenshot(path=str(shot), full_page=True)
-                shots.append(str(shot))
-                result.update(
-                    {
-                        "operation_result": "write_adjust_inventory_bridge_failed",
-                        "verify_passed": False,
-                        "verify_reason": "entry_not_ready",
-                        "page_failure_code": "ENTRY_NOT_READY",
-                        "failure_layer": "page",
-                        "page_steps": steps,
-                        "page_evidence_count": len(shots),
-                        "screenshot_paths": shots,
-                    }
-                )
-                browser.close()
-                return _write_output(run_id, result)
-
-            old_inventory = _parse_inventory(html)
-            if old_inventory is None:
-                old_inventory = int(payload.get("old_inventory") or 100)
-
-            # open_editor
-            steps.append("open_editor")
-            page.goto(f"{base}/admin/inventory/adjust?sku={sku}", wait_until="domcontentloaded", timeout=15000)
-
-            # input_inventory + submit_change
-            new_inventory = target_inventory if target_inventory else old_inventory + delta
-            steps.append("input_inventory")
-            page.fill('input[name="target_inventory"]', str(new_inventory))
-            steps.append("submit_change")
-            page.click('button[type="submit"]')
-            page.wait_for_load_state("domcontentloaded")
-
-            # read_feedback
-            steps.append("read_feedback")
-            submit_html = page.content()
-            success = "提交成功" in submit_html or "msg-ok" in submit_html
-
-            # verify_result
-            steps.append("verify_result")
-            page.goto(inv_url, wait_until="domcontentloaded", timeout=15000)
-            verify_html = page.content()
-            after_inventory = _parse_inventory(verify_html)
-            verify_passed = bool(success and after_inventory is not None and after_inventory == new_inventory)
-
-            shot = evidence_dir / f"{run_id}-final.png"
-            page.screenshot(path=str(shot), full_page=True)
-            shots.append(str(shot))
-
-            result.update(
-                {
-                    "operation_result": "write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed",
-                    "verify_passed": verify_passed,
-                    "verify_reason": "" if verify_passed else "verify_fail",
-                    "page_failure_code": "" if verify_passed else "VERIFY_FAIL",
-                    "failure_layer": "" if verify_passed else "verify_failed",
-                    "page_steps": steps,
-                    "page_evidence_count": len(shots),
-                    "old_inventory": old_inventory,
-                    "new_inventory": int(after_inventory if after_inventory is not None else new_inventory),
-                    "screenshot_paths": shots,
-                }
-            )
-            browser.close()
-    except PlaywrightTimeoutError:
-        result.update(
-            {
-                "operation_result": "write_adjust_inventory_bridge_timeout",
-                "verify_passed": False,
-                "verify_reason": "bridge_request_timeout",
-                "page_failure_code": "PAGE_TIMEOUT",
-                "failure_layer": "bridge_timeout",
-                "page_steps": steps,
-                "page_evidence_count": len(shots),
-                "screenshot_paths": shots,
-            }
-        )
-    except Exception as exc:
-        result.update(
-            {
-                "operation_result": "write_adjust_inventory_bridge_failed",
-                "verify_passed": False,
-                "verify_reason": f"executor_error:{type(exc).__name__}",
-                "page_failure_code": "EXECUTOR_ERROR",
-                "failure_layer": "bridge_executor_failed",
-                "page_steps": steps,
-                "page_evidence_count": len(shots),
-                "screenshot_paths": shots,
-            }
-        )
-
-    return _write_output(run_id, result)
+    out_fp = OUTBOX_DIR / f"{run_id}.output.json"
+    _write_json(out_fp, out)
+    return out_fp
 
 
 def main() -> int:
