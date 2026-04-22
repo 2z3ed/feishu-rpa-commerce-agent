@@ -7,16 +7,17 @@ v2: append-only ledger — also update_price (awaiting + rare success), confirm_
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
+import requests
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.time import format_shanghai_dt, get_shanghai_now
-from app.db.models import TaskRecord
+from app.db.models import TaskRecord, TaskStep
 from app.executors import get_product_executor
-from app.services.feishu.client import FeishuClient
 from app.utils.task_logger import log_step
 
 # Ledger columns (add matching fields in Bitable; v1 columns retained, v2 adds the rest)
@@ -39,6 +40,27 @@ BITABLE_FIELD_RESULT_SUMMARY = "result_summary"
 BITABLE_FIELD_ERROR_MESSAGE = "error_message"
 
 BITABLE_LEDGER_STRATEGY = "append"
+
+# P9-C: RPA execution evidence ledger (fixed schema).
+BITABLE_FIELD_LEDGER_TYPE_CN = "台账类型"
+BITABLE_FIELD_RUN_ID = "run_id"
+BITABLE_FIELD_PROVIDER_ID = "provider_id"
+BITABLE_FIELD_CAPABILITY = "capability"
+BITABLE_FIELD_EXECUTION_MODE = "execution_mode"
+BITABLE_FIELD_RUNTIME_STATE = "runtime_state"
+BITABLE_FIELD_OPERATION_RESULT = "operation_result"
+BITABLE_FIELD_OLD_INVENTORY = "old_inventory"
+BITABLE_FIELD_TARGET_INVENTORY = "target_inventory"
+BITABLE_FIELD_NEW_INVENTORY = "new_inventory"
+BITABLE_FIELD_VERIFY_PASSED = "verify_passed"
+BITABLE_FIELD_VERIFY_REASON = "verify_reason"
+BITABLE_FIELD_PAGE_FAILURE_CODE = "page_failure_code"
+BITABLE_FIELD_FAILURE_LAYER = "failure_layer"
+BITABLE_FIELD_PAGE_STEPS = "page_steps"
+BITABLE_FIELD_PAGE_EVIDENCE_COUNT = "page_evidence_count"
+BITABLE_FIELD_SCREENSHOT_PATHS = "screenshot_paths"
+BITABLE_FIELD_LATEST_EVIDENCE_PATH = "latest_evidence_path"
+BITABLE_FIELD_FINISHED_AT = "finished_at"
 
 
 def _mask_id(value: str, head: int = 4, tail: int = 4) -> str:
@@ -112,6 +134,62 @@ def _fmt_dt(val: Any) -> str:
     if val is None:
         return ""
     return format_shanghai_dt(val)
+
+
+def _to_bitable_datetime_ms(val: Any) -> int:
+    dt_val = val
+    if dt_val is None:
+        dt_val = get_shanghai_now()
+    if isinstance(dt_val, datetime):
+        return int(dt_val.timestamp() * 1000)
+    return int(get_shanghai_now().timestamp() * 1000)
+
+
+def _to_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    s = str(val or "").strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
+
+
+def _to_int(val: Any, default: int = 0) -> int:
+    try:
+        if val is None or str(val).strip() == "":
+            return default
+        return int(float(str(val)))
+    except Exception:
+        return default
+
+
+def _parse_action_detail_kv(detail: str) -> dict[str, str]:
+    data: dict[str, str] = {}
+    text = (detail or "").strip()
+    if not text:
+        return data
+    for part in text.split(","):
+        item = part.strip()
+        if "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        key = k.strip()
+        if not key:
+            continue
+        data[key] = v.strip()
+    return data
+
+
+def _latest_step_detail(db: Session, task_id: str, step_code: str) -> str:
+    row = (
+        db.query(TaskStep.detail)
+        .filter(TaskStep.task_id == task_id, TaskStep.step_code == step_code)
+        .order_by(TaskStep.created_at.desc())
+        .first()
+    )
+    if not row:
+        return ""
+    if isinstance(row, tuple):
+        return str(row[0] or "")
+    return str(getattr(row, "detail", "") or "")
 
 
 def _base_ledger_fields(task_record: TaskRecord) -> dict[str, Any]:
@@ -236,7 +314,65 @@ def _build_ledger_original_after_confirm(original: TaskRecord, graph_result: dic
     return f
 
 
-def _bitable_append_row(*, step_task_id: str, fields: dict[str, Any], kind: str) -> None:
+def _build_rpa_success_evidence_fields(
+    task_record: TaskRecord,
+    graph_result: dict[str, Any],
+    db: Session,
+) -> dict[str, Any]:
+    pr = graph_result.get("parsed_result") if isinstance(graph_result.get("parsed_result"), dict) else {}
+    action_kv = _parse_action_detail_kv(_latest_step_detail(db, task_record.task_id, "action_executed"))
+
+    screenshots = pr.get("screenshot_paths")
+    if isinstance(screenshots, list):
+        screenshot_paths = [str(x) for x in screenshots if str(x).strip()]
+    else:
+        screenshot_paths = [x for x in str(action_kv.get("screenshot_paths", "")).split("|") if x]
+    page_steps = pr.get("page_steps")
+    if isinstance(page_steps, list):
+        page_steps_text = ",".join([str(x).strip() for x in page_steps if str(x).strip()])
+    else:
+        page_steps_text = str(action_kv.get("page_steps", "")).replace("|", ",")
+
+    run_id = str(pr.get("run_id") or action_kv.get("run_id") or task_record.task_id)
+    verify_passed = _to_bool(pr.get("verify_passed", action_kv.get("verify_passed", False)))
+    verify_reason = str(pr.get("verify_reason") or action_kv.get("verify_reason") or "")
+    old_inventory = _to_int(pr.get("old_inventory", action_kv.get("old_inventory")))
+    target_inventory = _to_int(pr.get("target_inventory", action_kv.get("target_inventory")))
+    new_inventory = _to_int(pr.get("post_inventory", action_kv.get("post_inventory")))
+    latest_evidence_path = str(pr.get("raw_result_path") or action_kv.get("raw_result_path") or "")
+    result_summary = str(graph_result.get("result_summary") or task_record.result_summary or "")
+
+    return {
+        BITABLE_FIELD_LEDGER_TYPE_CN: "rpa_runtime_success",
+        BITABLE_FIELD_TASK_ID: task_record.task_id,
+        BITABLE_FIELD_TARGET_TASK_ID: str(getattr(task_record, "target_task_id", None) or pr.get("target_task_id") or ""),
+        BITABLE_FIELD_RUN_ID: run_id,
+        BITABLE_FIELD_PROVIDER_ID: str(pr.get("provider_id") or "yingdao_local"),
+        BITABLE_FIELD_CAPABILITY: str(graph_result.get("capability") or "warehouse.adjust_inventory"),
+        BITABLE_FIELD_EXECUTION_MODE: "rpa",
+        BITABLE_FIELD_RUNTIME_STATE: "done",
+        BITABLE_FIELD_OPERATION_RESULT: str(pr.get("operation_result") or action_kv.get("operation_result") or ""),
+        BITABLE_FIELD_SKU: str(graph_result.get("slots", {}).get("sku") or pr.get("sku") or ""),
+        BITABLE_FIELD_OLD_INVENTORY: old_inventory,
+        BITABLE_FIELD_TARGET_INVENTORY: target_inventory,
+        BITABLE_FIELD_NEW_INVENTORY: new_inventory,
+        BITABLE_FIELD_VERIFY_PASSED: verify_passed,
+        BITABLE_FIELD_VERIFY_REASON: verify_reason,
+        BITABLE_FIELD_PAGE_FAILURE_CODE: str(pr.get("page_failure_code") or action_kv.get("page_failure_code") or ""),
+        BITABLE_FIELD_FAILURE_LAYER: str(pr.get("failure_layer") or action_kv.get("failure_layer") or ""),
+        BITABLE_FIELD_PAGE_STEPS: page_steps_text,
+        BITABLE_FIELD_PAGE_EVIDENCE_COUNT: _to_int(pr.get("page_evidence_count", action_kv.get("page_evidence_count", 0))),
+        BITABLE_FIELD_SCREENSHOT_PATHS: "|".join(screenshot_paths),
+        BITABLE_FIELD_LATEST_EVIDENCE_PATH: latest_evidence_path,
+        BITABLE_FIELD_RESULT_SUMMARY: result_summary[:2000],
+        BITABLE_FIELD_CREATED_AT: _to_bitable_datetime_ms(getattr(task_record, "created_at", None)),
+        BITABLE_FIELD_FINISHED_AT: _to_bitable_datetime_ms(
+            getattr(task_record, "finished_at", None) or getattr(task_record, "updated_at", None)
+        ),
+    }
+
+
+def _bitable_append_row(*, step_task_id: str, fields: dict[str, Any], kind: str, table_id_override: str = "") -> None:
     """Single create; logs bitable_write_* on step_task_id with kind + append in detail."""
     log_step(
         step_task_id,
@@ -245,14 +381,8 @@ def _bitable_append_row(*, step_task_id: str, fields: dict[str, Any], kind: str)
         f"kind={kind} strategy={BITABLE_LEDGER_STRATEGY}",
     )
     try:
-        from lark_oapi.api.bitable.v1.model.app_table_record import AppTableRecord
-        from lark_oapi.api.bitable.v1.model.create_app_table_record_request import (
-            CreateAppTableRecordRequest,
-        )
-
-        client = FeishuClient().client
         app_token = settings.FEISHU_BITABLE_APP_TOKEN.strip()
-        table_id = settings.FEISHU_BITABLE_TABLE_ID.strip()
+        table_id = (table_id_override or settings.FEISHU_BITABLE_TABLE_ID).strip()
 
         logger.info(
             "Bitable append: step_task_id=%s kind=%s app_token=%s table_id=%s",
@@ -261,35 +391,14 @@ def _bitable_append_row(*, step_task_id: str, fields: dict[str, Any], kind: str)
             _mask_id(app_token),
             _mask_id(table_id),
         )
-
-        body = AppTableRecord.builder().fields(fields).build()
-        request = (
-            CreateAppTableRecordRequest.builder()
-            .app_token(app_token)
-            .table_id(table_id)
-            .request_body(body)
-            .build()
+        record_id = _append_bitable_record(app_token=app_token, table_id=table_id, fields=fields, step_task_id=step_task_id)
+        log_step(
+            step_task_id,
+            "bitable_write_succeeded",
+            "success",
+            f"kind={kind} strategy={BITABLE_LEDGER_STRATEGY} record_id={record_id}",
         )
-        response = client.bitable.v1.app_table_record.create(request)
-        if response.success():
-            record_id = ""
-            if response.data and response.data.record:
-                record_id = getattr(response.data.record, "record_id", "") or ""
-            log_step(
-                step_task_id,
-                "bitable_write_succeeded",
-                "success",
-                f"kind={kind} strategy={BITABLE_LEDGER_STRATEGY} record_id={record_id}",
-            )
-            logger.info("Bitable row appended: step_task_id=%s kind=%s record_id=%s", step_task_id, kind, record_id)
-        else:
-            detail = _format_bitable_api_failure(step_task_id, app_token, table_id, response)
-            log_step(
-                step_task_id,
-                "bitable_write_failed",
-                "failed",
-                f"kind={kind} strategy={BITABLE_LEDGER_STRATEGY} | {detail}",
-            )
+        logger.info("Bitable row appended: step_task_id=%s kind=%s record_id=%s", step_task_id, kind, record_id)
     except Exception as exc:  # pragma: no cover - network/SDK
         at = settings.FEISHU_BITABLE_APP_TOKEN.strip()
         tid = settings.FEISHU_BITABLE_TABLE_ID.strip()
@@ -301,6 +410,91 @@ def _bitable_append_row(*, step_task_id: str, fields: dict[str, Any], kind: str)
             f"kind={kind} strategy={BITABLE_LEDGER_STRATEGY} | {extra} | exc={str(exc)[:280]}",
         )
         logger.warning("Bitable append exception: step_task_id=%s kind=%s %s err=%s", step_task_id, kind, extra, exc)
+
+
+def _append_bitable_record(app_token: str, table_id: str, fields: dict[str, Any], step_task_id: str) -> str:
+    # Prefer SDK if available; fallback to HTTP API when local stub shadows SDK modules.
+    try:
+        from lark_oapi.api.bitable.v1.model.app_table_record import AppTableRecord
+        from lark_oapi.api.bitable.v1.model.create_app_table_record_request import (
+            CreateAppTableRecordRequest,
+        )
+        from app.services.feishu.client import FeishuClient
+
+        client = FeishuClient().client
+        body = AppTableRecord.builder().fields(fields).build()
+        request = (
+            CreateAppTableRecordRequest.builder()
+            .app_token(app_token)
+            .table_id(table_id)
+            .request_body(body)
+            .build()
+        )
+        response = client.bitable.v1.app_table_record.create(request)
+        if not response.success():
+            detail = _format_bitable_api_failure(step_task_id, app_token, table_id, response)
+            raise RuntimeError(detail)
+        if response.data and response.data.record:
+            return getattr(response.data.record, "record_id", "") or ""
+        return ""
+    except ModuleNotFoundError:
+        return _append_bitable_record_via_http(app_token=app_token, table_id=table_id, fields=fields)
+
+
+def _append_bitable_record_via_http(app_token: str, table_id: str, fields: dict[str, Any]) -> str:
+    tenant_access_token = _fetch_tenant_access_token()
+
+    record_resp = requests.post(
+        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        json={"fields": fields},
+        timeout=10,
+    )
+    record_resp.raise_for_status()
+    record_payload = record_resp.json() if record_resp.content else {}
+    if int(record_payload.get("code", -1)) != 0:
+        raise RuntimeError(f"bitable_api_failed:{record_payload.get('msg', 'unknown')}")
+    data = record_payload.get("data") or {}
+    record = data.get("record") or {}
+    return str(record.get("record_id") or "")
+
+
+def _fetch_tenant_access_token() -> str:
+    app_id = (settings.FEISHU_APP_ID or "").strip()
+    app_secret = (settings.FEISHU_APP_SECRET or "").strip()
+    if not app_id or not app_secret:
+        raise RuntimeError("feishu_app_auth_missing")
+    token_resp = requests.post(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        json={"app_id": app_id, "app_secret": app_secret},
+        timeout=10,
+    )
+    token_resp.raise_for_status()
+    token_payload = token_resp.json() if token_resp.content else {}
+    if int(token_payload.get("code", -1)) != 0:
+        raise RuntimeError(f"tenant_token_failed:{token_payload.get('msg', 'unknown')}")
+    tenant_access_token = str(token_payload.get("tenant_access_token") or "")
+    if not tenant_access_token:
+        raise RuntimeError("tenant_access_token_empty")
+    return tenant_access_token
+
+
+def _resolve_rpa_evidence_table_id(app_token: str) -> str:
+    access_token = _fetch_tenant_access_token()
+    resp = requests.get(
+        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    payload = resp.json() if resp.content else {}
+    if int(payload.get("code", -1)) != 0:
+        raise RuntimeError(f"bitable_list_tables_failed:{payload.get('msg', 'unknown')}")
+    items = ((payload.get("data") or {}).get("items") or [])
+    for item in items:
+        if str(item.get("name") or "").strip() == "RPA执行证据台账":
+            return str(item.get("table_id") or "")
+    raise RuntimeError("rpa_evidence_table_not_found")
 
 
 def try_write_bitable_ledger(
@@ -329,6 +523,20 @@ def try_write_bitable_ledger(
 
     intent = graph_result.get("intent_code")
     status = graph_result.get("status")
+
+    capability = str(graph_result.get("capability") or "")
+
+    if (intent == "warehouse.adjust_inventory" or capability == "warehouse.adjust_inventory") and status == "succeeded":
+        fields = _build_rpa_success_evidence_fields(task_record, graph_result, db)
+        app_token = settings.FEISHU_BITABLE_APP_TOKEN.strip()
+        rpa_table_id = _resolve_rpa_evidence_table_id(app_token=app_token)
+        _bitable_append_row(
+            step_task_id=task_id,
+            fields=fields,
+            kind="adjust_inventory_rpa_success",
+            table_id_override=rpa_table_id,
+        )
+        return
 
     if intent == "product.query_sku_status" and status == "succeeded":
         product_data = graph_result.get("query_product_data")
