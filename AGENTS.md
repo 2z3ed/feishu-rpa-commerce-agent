@@ -531,3 +531,139 @@ Yingdao 相关实现允许继续推进，但必须遵守：
 
 如果这句话还不成立，
 就不要继续扩平台、扩岗位、扩能力。
+
+## P9-B 当前唯一主线（SQLite 留痕回接验证）
+
+### 1. 当前阶段重新定义
+当前不要再把 P9 理解为“影刀执行层继续验证”。
+影刀执行层 success 主链已经通过，当前真正未收口的是：
+
+- 主系统留痕回接
+- `/tasks`、`/steps`、`action_executed.detail`
+- 数据库真相源落地
+- 飞书多维表台账挂接
+
+
+
+当前唯一主线为：
+
+**P9-B：主系统留痕回接（SQLite 验证版）**
+
+### 2. 当前必须继承的真实事实
+以下内容已经成立，不要回头重做：
+
+- ShadowBot real-runtime success 真点击链已成立
+- self-hosted real_nonprod_page 已真实执行成功
+- success 样本已验证 `100 -> 105`
+- runtime `done.json` 已成立
+- 左侧 `outbox.output.json` 已成立
+- `bridge_result_timeout` 在 success 样本中已收住
+- evidence 至少已有 runtime-result.json 兜底文件
+
+### 3. 当前不要再做的事
+禁止：
+
+- 继续深挖 failure 分支
+- 继续修改 ShadowBot success 主流程
+- 继续打磨注入式 failure 副本
+- 扩第二个动作
+- 切到 `product.update_price`
+- 接真实生产页
+- 做真实截图增强
+- 做 latest-file 临时方案回收
+- 先上 PostgreSQL 作为第一验证环境
+- 让 ShadowBot 直接写飞书多维表
+- 重构任务系统主链
+
+### 4. 当前唯一目标
+把已经跑通的 real-runtime success 结果，正式回接到主系统数据库留痕。
+
+最低要求：
+
+- `task_records` 有记录
+- `task_steps` 有记录
+- `action_executed.detail` 有 RPA 字段
+- `/tasks` `/tasks/{task_id}` `/tasks/{task_id}/steps` 可查
+- 后续再由主系统异步写飞书多维表
+
+### 5. 当前数据库策略
+当前阶段固定：
+
+- **先用 SQLite 做主系统留痕回接验证**
+- PostgreSQL 回归后移到下一轮
+
+原则：
+
+- 数据库是真相源
+- 多维表只是业务台账
+- 当前不能把多维表当唯一留痕源
+
+### 6. 当前 RPA 结果留痕字段
+本轮 `action_executed.detail` 最小必须包含：
+
+- `rpa_vendor`
+- `run_id`
+- `operation_result`
+- `verify_passed`
+- `verify_reason`
+- `page_failure_code`
+- `failure_layer`
+- `page_steps`
+- `page_evidence_count`
+- `screenshot_paths`
+
+### 7. 当前 Bitable 策略
+当前不要把 RPA 留痕直接塞进旧业务逻辑里混写。
+建议结构：
+
+- 保留原任务业务台账主表
+- 新增一张 `RPA执行证据台账`
+
+当前阶段先定字段，不要求一开始就全部做完。
+
+### 8. 当前 agent 行为约束
+agent 本轮只允许做这些事：
+
+1. 起 SQLite 验证环境
+2. 让 success 样本结果正式进入主系统数据库
+3. 保证 `/tasks` `/steps` `/detail` 可查
+4. 设计并冻结 Bitable 的 RPA 执行证据表字段
+5. 补对应文档
+
+agent 本轮不允许：
+
+- 修改 ShadowBot 成功主流程
+- 继续折腾 failure 副本
+- 引入 PostgreSQL 作为首验收依赖
+- 改写 README 总叙事
+- 扩展额外业务动作
+- 对外宣称飞书侧留痕已经完成，除非多维表和主系统链都已人工验收
+
+### 9. 当前验收标准
+只有满足下面条件，才算本轮通过：
+
+1. 8000 主系统可启动
+2. worker 可启动
+3. success 样本经主系统正式执行
+4. `task_records` 有记录
+5. `task_steps` 有记录
+6. `action_executed.detail` 有 RPA 字段
+7. `/tasks` `/steps` API 可查
+8. success 仍然保持 `100 -> 105`
+9. Bitable RPA 执行证据表字段设计已冻结
+
+
+## 当前阶段入口（必须先读）
+
+当前唯一主线为：
+
+P9-C：飞书多维表异步回写接入（SQLite 真相源版）
+
+开始任何开发前，先阅读：
+
+- docs/p9b/p9b-handoff.md
+- docs/p9b/p9b-closure-report.md
+- docs/p9b/p9b-bitable-schema.md
+- docs/p9b/p9b-sqlite-acceptance-sop.md
+- docs/p9c/p9c-project-plan.md
+- docs/p9c/P9-C-agent-prompt.md

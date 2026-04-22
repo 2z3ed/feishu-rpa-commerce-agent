@@ -1237,6 +1237,7 @@ def _confirm_execute_odoo_adjust_inventory(
     )
 
     rpa_vendor = ""
+    run_id = ""
     raw_result_path = ""
     evidence_paths: list[str] = []
     page_url = ""
@@ -1244,6 +1245,7 @@ def _confirm_execute_odoo_adjust_inventory(
     page_steps: list[str] = []
     page_evidence_count = 0
     page_failure_code = ""
+    screenshot_paths: list[str] = []
 
     if confirm_exec_backend == "yingdao_bridge":
         bridge_payload = {
@@ -1251,6 +1253,9 @@ def _confirm_execute_odoo_adjust_inventory(
             "confirm_task_id": current_task_id,
             "provider_id": provider_id,
             "capability": "warehouse.adjust_inventory",
+            # Stable run_id for file-exchange ↔ runtime ↔ DB evidence linkage.
+            # Prefer confirm task id so repeated confirms remain idempotent by task id.
+            "run_id": str(current_task_id or target_task_id),
             "sku": sku,
             "delta": delta,
             "old_inventory": old_inv,
@@ -1290,6 +1295,7 @@ def _confirm_execute_odoo_adjust_inventory(
                 },
             }
         rpa_vendor = str(bridge_out.get("rpa_vendor") or "yingdao")
+        run_id = str(bridge_out.get("run_id") or bridge_payload.get("run_id") or "")
         raw_result_path = str(bridge_out.get("raw_result_path") or "")
         evidence_paths = [str(x) for x in (bridge_out.get("evidence_paths") or [])]
         page_url = str(bridge_out.get("page_url") or "")
@@ -1297,6 +1303,7 @@ def _confirm_execute_odoo_adjust_inventory(
         page_steps = [str(x) for x in (bridge_out.get("page_steps") or [])]
         page_evidence_count = int(bridge_out.get("page_evidence_count") or len(evidence_paths))
         page_failure_code = str(bridge_out.get("page_failure_code") or "")
+        screenshot_paths = [str(x) for x in (bridge_out.get("screenshot_paths") or []) if str(x)]
         verify_passed = bool(bridge_out.get("verify_passed", False))
         verify_reason = str(bridge_out.get("verify_reason") or "")
         operation_result = str(bridge_out.get("operation_result") or "")
@@ -1379,6 +1386,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "capability": "warehouse.adjust_inventory",
         "confirm_backend": "internal_sandbox",
         "rpa_vendor": rpa_vendor,
+        "run_id": run_id if confirm_exec_backend == "yingdao_bridge" else "",
         "raw_result_path": raw_result_path,
         "evidence_paths": evidence_paths,
         "page_url": page_url,
@@ -1386,6 +1394,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "page_steps": page_steps,
         "page_evidence_count": page_evidence_count,
         "page_failure_code": page_failure_code,
+        "screenshot_paths": screenshot_paths if confirm_exec_backend == "yingdao_bridge" else [],
         "sku": sku,
         "old_inventory": old_inv,
         "delta": delta,
@@ -1414,6 +1423,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "confirm_task_id": current_task_id or None,
         "confirm_backend": result["confirm_backend"],
         "rpa_vendor": rpa_vendor,
+        "run_id": result.get("run_id") or "",
         "raw_result_path": raw_result_path,
         "evidence_paths": evidence_paths,
         "page_url": page_url,
@@ -1421,6 +1431,7 @@ def _confirm_execute_odoo_adjust_inventory(
         "page_steps": page_steps,
         "page_evidence_count": page_evidence_count,
         "page_failure_code": page_failure_code,
+        "screenshot_paths": result.get("screenshot_paths") or [],
     }
     return result
 
@@ -1561,9 +1572,54 @@ def execute_odoo_adjust_inventory_prepare(*, task_id: str, slots: dict) -> dict:
     if delta == 0:
         raise ValueError("delta is required")
 
-    # Read-before-write (readonly chain) to capture old value and compute target.
-    before = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
-    old_inv = int(before.get("inventory") or 0)
+    # Read-before-write to capture old value and compute target.
+    #
+    # P9-B: when running the real_nonprod_page Yingdao flow, the source-of-truth
+    # for the baseline inventory is the nonprod_admin_stub SQLite, not the in-process
+    # internal_sandbox defaults.
+    old_inv: int
+    before: dict
+    if str(settings.YINGDAO_BRIDGE_EXECUTION_MODE or "").strip().lower() == "real_nonprod_page":
+        try:
+            import sqlite3
+            from pathlib import Path
+
+            stub_db = (
+                Path(__file__).resolve().parents[3]
+                / "tools/nonprod_admin_stub/data/nonprod_stub.db"
+            )
+            if stub_db.exists():
+                con = sqlite3.connect(str(stub_db))
+                try:
+                    row = con.execute(
+                        "select inventory from inventory_items where sku=?",
+                        (sku,),
+                    ).fetchone()
+                finally:
+                    con.close()
+                old_inv = int(row[0]) if row else 0
+            else:
+                old_inv = 0
+        except Exception:
+            old_inv = 0
+        before = {
+            "sku": sku,
+            "inventory": old_inv,
+            "platform": "odoo",
+            "provider_id": "odoo",
+            "capability": "warehouse.query_inventory",
+            "readiness_status": "ready",
+            "endpoint_profile": "real_nonprod_stub_v1",
+            "session_injection_mode": "cookie",
+            "provider_profile": "odoo",
+            "auth_profile": "nonprod_stub",
+            "request_adapter": "nonprod_stub_sqlite",
+            "response_mapper": "nonprod_stub_html",
+            "credential_profile": "nonprod_stub",
+        }
+    else:
+        before = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
+        old_inv = int(before.get("inventory") or 0)
     target_inv = max(0, int(old_inv + delta))
 
     ctx = {

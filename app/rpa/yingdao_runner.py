@@ -295,6 +295,7 @@ def run_yingdao_adjust_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         out = wait_for_yingdao_output(run_id)
         _ = read_yingdao_output_file(run_id)
         return {
+            "run_id": run_id,
             "task_id": str(payload.get("task_id") or run_id),
             "confirm_task_id": str(payload.get("confirm_task_id") or ""),
             "provider_id": str(payload.get("provider_id") or "odoo"),

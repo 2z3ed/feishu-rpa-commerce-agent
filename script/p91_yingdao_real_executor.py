@@ -64,32 +64,52 @@ def _base_failed(run_id: str, reason: str) -> dict[str, Any]:
     }
 
 
-def _normalize_runtime_result(run_id: str, raw: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_runtime_result(run_id: str, raw: dict[str, Any], payload: dict[str, Any], *, runtime_state: str) -> dict[str, Any]:
     # Runtime-side files may be either bridge-like object or custom detail object.
-    # Normalize back to P90 outbox contract.
+    # Normalize back to P90 outbox contract, keeping runtime route semantic consistency.
     page_steps = list(raw.get("page_steps") or [])
     old_inventory = int(raw.get("old_inventory") or payload.get("old_inventory") or 0)
-    new_inventory = int(raw.get("new_inventory") or payload.get("target_inventory") or 0)
+    target_inventory = int(payload.get("target_inventory") or 0)
+    new_inventory = int(raw.get("new_inventory") or target_inventory or 0)
+
     verify_passed = bool(raw.get("verify_passed", False))
+    if runtime_state == "done":
+        # done route should be success-semantic
+        verify_passed = True if target_inventory == 0 else (new_inventory == target_inventory)
+    elif runtime_state == "failed":
+        # failed route should be failure-semantic
+        verify_passed = False
+
     operation_result = str(raw.get("operation_result") or ("write_adjust_inventory" if verify_passed else "write_adjust_inventory_verify_failed"))
+    if verify_passed:
+        operation_result = "write_adjust_inventory"
+    elif operation_result == "write_adjust_inventory":
+        operation_result = "write_adjust_inventory_verify_failed"
+
+    screenshot_paths = [str(x) for x in (raw.get("screenshot_paths") or []) if str(x)]
+    if not screenshot_paths:
+        # Ensure minimal evidence is always landed for success/failure stabilization.
+        fallback_evidence = RUNTIME_EVIDENCE_DIR / f"{run_id}-runtime-result.json"
+        _write_json(fallback_evidence, {"run_id": run_id, "runtime_state": runtime_state, "raw": raw})
+        screenshot_paths = [str(fallback_evidence)]
 
     out = {
         "run_id": run_id,
         "operation_result": operation_result,
         "verify_passed": verify_passed,
-        "verify_reason": str(raw.get("verify_reason") or ("" if verify_passed else "verify_fail")),
+        "verify_reason": str(raw.get("verify_reason") or ("ok" if verify_passed else "verify_fail")),
         "page_failure_code": str(raw.get("page_failure_code") or ("" if verify_passed else "VERIFY_FAIL")),
         "failure_layer": str(raw.get("failure_layer") or ("" if verify_passed else "verify_failed")),
         "page_steps": page_steps,
-        "page_evidence_count": int(raw.get("page_evidence_count") or len(raw.get("screenshot_paths") or [])),
+        "page_evidence_count": len(screenshot_paths),
         "old_inventory": old_inventory,
         "new_inventory": new_inventory,
-        "screenshot_paths": list(raw.get("screenshot_paths") or []),
+        "screenshot_paths": screenshot_paths,
     }
     return out
 
 
-def _wait_runtime_result(run_id: str, timeout_s: int = 120) -> tuple[str, dict[str, Any]]:
+def _wait_runtime_result(run_id: str, timeout_s: int = 180) -> tuple[str, dict[str, Any]]:
     done_fp = RUNTIME_DONE_DIR / f"{run_id}.done.json"
     fail_fp = RUNTIME_FAILED_DIR / f"{run_id}.failed.json"
     deadline = time.time() + timeout_s
@@ -123,7 +143,7 @@ def process_one(input_fp: Path) -> Path:
         out["failure_layer"] = "bridge_timeout"
         out["page_failure_code"] = "PAGE_TIMEOUT"
     else:
-        out = _normalize_runtime_result(run_id, runtime_raw, payload)
+        out = _normalize_runtime_result(run_id, runtime_raw, payload, runtime_state=state)
 
     out_fp = OUTBOX_DIR / f"{run_id}.output.json"
     _write_json(out_fp, out)

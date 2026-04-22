@@ -158,6 +158,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         original_update_task_id = pr.get("original_update_task_id", "")
         confirm_task_id = pr.get("confirm_task_id", "")
         rpa_vendor = pr.get("rpa_vendor", "")
+        run_id = pr.get("run_id", "")
         raw_result_path = pr.get("raw_result_path", "")
         evidence_paths = pr.get("evidence_paths", [])
         evidence_paths_count = len(evidence_paths) if isinstance(evidence_paths, list) else 0
@@ -167,6 +168,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         page_steps_text = "|".join([str(x) for x in page_steps]) if isinstance(page_steps, list) else ""
         page_evidence_count = pr.get("page_evidence_count", 0)
         page_failure_code = pr.get("page_failure_code", "")
+        screenshot_paths = pr.get("screenshot_paths", [])
+        screenshot_paths_text = "|".join([str(x) for x in screenshot_paths]) if isinstance(screenshot_paths, list) else str(screenshot_paths or "")
         gate_allow = result.get("gate_allow", pr.get("gate_allow", None))
         gate_status = result.get("gate_status", pr.get("gate_status", ""))
         gate_reason = result.get("gate_reason", pr.get("gate_reason", ""))
@@ -222,6 +225,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "original_update_task_id": original_update_task_id,
                 "confirm_task_id": confirm_task_id,
                 "rpa_vendor": rpa_vendor,
+                "run_id": run_id,
                 "raw_result_path": raw_result_path,
                 "evidence_paths_count": evidence_paths_count,
                 "page_url": page_url,
@@ -229,6 +233,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "page_steps": page_steps_text,
                 "page_evidence_count": page_evidence_count,
                 "page_failure_code": page_failure_code,
+                "screenshot_paths": screenshot_paths_text,
             }
         )
         log_step(
