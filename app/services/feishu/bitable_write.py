@@ -321,6 +321,8 @@ def _build_rpa_success_evidence_fields(
 ) -> dict[str, Any]:
     pr = graph_result.get("parsed_result") if isinstance(graph_result.get("parsed_result"), dict) else {}
     action_kv = _parse_action_detail_kv(_latest_step_detail(db, task_record.task_id, "action_executed"))
+    write_started_detail = _latest_step_detail(db, task_record.task_id, "controlled_write_started")
+    write_started_kv = _parse_action_detail_kv(write_started_detail)
 
     screenshots = pr.get("screenshot_paths")
     if isinstance(screenshots, list):
@@ -334,6 +336,18 @@ def _build_rpa_success_evidence_fields(
         page_steps_text = str(action_kv.get("page_steps", "")).replace("|", ",")
 
     run_id = str(pr.get("run_id") or action_kv.get("run_id") or task_record.task_id)
+    sku_from_started_detail = ""
+    for token in str(write_started_detail or "").replace(",", " ").split():
+        if token.startswith("sku="):
+            sku_from_started_detail = token.split("=", 1)[1].strip()
+            break
+    sku = str(
+        graph_result.get("slots", {}).get("sku")
+        or pr.get("sku")
+        or write_started_kv.get("sku")
+        or sku_from_started_detail
+        or ""
+    )
     verify_passed = _to_bool(pr.get("verify_passed", action_kv.get("verify_passed", False)))
     verify_reason = str(pr.get("verify_reason") or action_kv.get("verify_reason") or "")
     old_inventory = _to_int(pr.get("old_inventory", action_kv.get("old_inventory")))
@@ -352,7 +366,7 @@ def _build_rpa_success_evidence_fields(
         BITABLE_FIELD_EXECUTION_MODE: "rpa",
         BITABLE_FIELD_RUNTIME_STATE: "done",
         BITABLE_FIELD_OPERATION_RESULT: str(pr.get("operation_result") or action_kv.get("operation_result") or ""),
-        BITABLE_FIELD_SKU: str(graph_result.get("slots", {}).get("sku") or pr.get("sku") or ""),
+        BITABLE_FIELD_SKU: sku,
         BITABLE_FIELD_OLD_INVENTORY: old_inventory,
         BITABLE_FIELD_TARGET_INVENTORY: target_inventory,
         BITABLE_FIELD_NEW_INVENTORY: new_inventory,
@@ -497,6 +511,13 @@ def _resolve_rpa_evidence_table_id(app_token: str) -> str:
     raise RuntimeError("rpa_evidence_table_not_found")
 
 
+def _get_rpa_evidence_table_id(app_token: str) -> str:
+    explicit_table_id = (settings.FEISHU_RPA_EVIDENCE_TABLE_ID or "").strip()
+    if explicit_table_id:
+        return explicit_table_id
+    return _resolve_rpa_evidence_table_id(app_token=app_token)
+
+
 def try_write_bitable_ledger(
     *,
     task_id: str,
@@ -529,7 +550,7 @@ def try_write_bitable_ledger(
     if (intent == "warehouse.adjust_inventory" or capability == "warehouse.adjust_inventory") and status == "succeeded":
         fields = _build_rpa_success_evidence_fields(task_record, graph_result, db)
         app_token = settings.FEISHU_BITABLE_APP_TOKEN.strip()
-        rpa_table_id = _resolve_rpa_evidence_table_id(app_token=app_token)
+        rpa_table_id = _get_rpa_evidence_table_id(app_token=app_token)
         _bitable_append_row(
             step_task_id=task_id,
             fields=fields,

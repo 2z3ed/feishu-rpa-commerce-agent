@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     ENABLE_FEISHU_BITABLE_WRITE: bool = False
     FEISHU_BITABLE_APP_TOKEN: str = ""
     FEISHU_BITABLE_TABLE_ID: str = ""
+    FEISHU_RPA_EVIDENCE_TABLE_ID: str = ""
 
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"

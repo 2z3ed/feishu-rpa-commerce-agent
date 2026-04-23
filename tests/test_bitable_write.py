@@ -227,3 +227,25 @@ def test_resolve_rpa_evidence_table_id_prefers_named_table(monkeypatch):
     monkeypatch.setattr(bitable_write_module.requests, "get", lambda *args, **kwargs: _Resp())
     out = bitable_write_module._resolve_rpa_evidence_table_id("app_tok")
     assert out == "tbl_rpa"
+
+
+def test_get_rpa_evidence_table_id_prefers_explicit_env(monkeypatch):
+    monkeypatch.setattr(settings, "FEISHU_RPA_EVIDENCE_TABLE_ID", "tbl_explicit")
+    monkeypatch.setattr(
+        bitable_write_module,
+        "_resolve_rpa_evidence_table_id",
+        lambda app_token: "tbl_fallback",
+    )
+    out = bitable_write_module._get_rpa_evidence_table_id("app_tok")
+    assert out == "tbl_explicit"
+
+
+def test_get_rpa_evidence_table_id_falls_back_to_name_resolve(monkeypatch):
+    monkeypatch.setattr(settings, "FEISHU_RPA_EVIDENCE_TABLE_ID", "")
+    monkeypatch.setattr(
+        bitable_write_module,
+        "_resolve_rpa_evidence_table_id",
+        lambda app_token: "tbl_fallback",
+    )
+    out = bitable_write_module._get_rpa_evidence_table_id("app_tok")
+    assert out == "tbl_fallback"

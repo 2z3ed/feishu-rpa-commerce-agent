@@ -653,17 +653,18 @@ agent 本轮不允许：
 9. Bitable RPA 执行证据表字段设计已冻结
 
 
+
 ## 当前阶段入口（必须先读）
 
 当前唯一主线为：
 
-P9-C：飞书多维表异步回写接入（SQLite 真相源版）
+P9-D：飞书多维表配置稳态化（最小增强版）
 
 开始任何开发前，先阅读：
 
 - docs/p9b/p9b-handoff.md
 - docs/p9b/p9b-closure-report.md
-- docs/p9b/p9b-bitable-schema.md
-- docs/p9b/p9b-sqlite-acceptance-sop.md
-- docs/p9c/p9c-project-plan.md
-- docs/p9c/P9-C-agent-prompt.md
+- docs/p9c/p9c-handoff.md
+- docs/p9c/p9c-closure-report.md
+- docs/p9d/p9d-project-plan.md
+- docs/p9d/P9-D-agent-prompt.md
