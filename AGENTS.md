@@ -658,13 +658,14 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P9-D：飞书多维表配置稳态化（最小增强版）
+P9-E：飞书前台老板演示闭环
 
 开始任何开发前，先阅读：
 
-- docs/p9b/p9b-handoff.md
-- docs/p9b/p9b-closure-report.md
-- docs/p9c/p9c-handoff.md
-- docs/p9c/p9c-closure-report.md
-- docs/p9d/p9d-project-plan.md
+- docs/p9d/p9d-closure-report.md
+- docs/p9d/p9d-handoff.md
+- docs/p9e/p9e-project-plan.md
+- docs/p9e/P9-E-agent-prompt.md
+- docs/p9e/p9e-boss-demo-sop.md
+- docs/p9e/p9e-acceptance-checklist.md
 - docs/p9d/P9-D-agent-prompt.md

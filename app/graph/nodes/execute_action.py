@@ -1568,9 +1568,9 @@ def execute_odoo_adjust_inventory_prepare(*, task_id: str, slots: dict) -> dict:
     sku = str(slots.get("sku") or "").strip().upper()
     if not sku:
         raise ValueError("SKU is required")
-    delta = int(slots.get("delta") or 0)
-    if delta == 0:
-        raise ValueError("delta is required")
+    delta_raw = slots.get("delta")
+    target_inventory_raw = slots.get("target_inventory")
+    delta = int(delta_raw) if delta_raw is not None else 0
 
     # Read-before-write to capture old value and compute target.
     #
@@ -1620,7 +1620,13 @@ def execute_odoo_adjust_inventory_prepare(*, task_id: str, slots: dict) -> dict:
     else:
         before = execute_odoo_query_inventory({"sku": sku, "platform": "odoo"})
         old_inv = int(before.get("inventory") or 0)
-    target_inv = max(0, int(old_inv + delta))
+    if target_inventory_raw is not None:
+        target_inv = max(0, int(target_inventory_raw))
+        delta = int(target_inv - old_inv)
+    else:
+        if delta == 0:
+            raise ValueError("delta or target_inventory is required")
+        target_inv = max(0, int(old_inv + delta))
 
     ctx = {
         "provider_id": "odoo",

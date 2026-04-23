@@ -129,25 +129,24 @@ def try_match_warehouse_query_inventory(text: str) -> tuple[str | None, dict]:
 
 
 def try_match_warehouse_adjust_inventory(text: str) -> tuple[str | None, dict]:
-    """Match warehouse.adjust_inventory for minimal Odoo high-risk write entry (P6.1).
+    """Match warehouse.adjust_inventory in P9-E minimal command scope.
 
-    Supported examples (must include 'odoo' + inventory keywords):
+    Supported examples:
+    - 把 A001 的库存改到 105
+    - 调整 A001 库存到 105
     - 调整 Odoo SKU A001 库存 +5
     - Odoo 把 A001 库存增加 5
-    - Odoo A001 库存减少 3
     """
-    if "odoo" not in text.lower():
-        return None, {}
     if "库存" not in text:
         return None, {}
-    if not any(k in text for k in ("调整", "增加", "减少", "加", "减")):
+    if not any(k in text for k in ("调整", "增加", "减少", "加", "减", "改到", "改成", "到")):
         return None, {}
 
     sku_match = re.search(r"(?:SKU|商品|产品)?\s*([A-Z][0-9]+)", text, re.IGNORECASE)
     if not sku_match:
         return None, {}
 
-    # Parse delta: prefer explicit signed number (+5/-3), fallback to "增加/减少 N"
+    # Parse delta first: explicit signed number (+5/-3), then 增加/减少 N.
     delta = None
     signed = re.search(r"([+-]\s*\d+)", text)
     if signed:
@@ -163,10 +162,22 @@ def try_match_warehouse_adjust_inventory(text: str) -> tuple[str | None, dict]:
         elif dec:
             delta = -int(dec.group(2))
 
-    if delta is None or delta == 0:
-        return None, {}
+    slots: dict[str, int | str] = {"sku": sku_match.group(1), "platform": "odoo"}
+    if delta is not None and delta != 0:
+        slots["delta"] = delta
+        return "warehouse.adjust_inventory", slots
 
-    return "warehouse.adjust_inventory", {"sku": sku_match.group(1), "delta": delta, "platform": "odoo"}
+    # Parse target_inventory for boss-demo text command:
+    # - 把 A001 的库存改到 105
+    # - 调整 A001 库存到 105
+    target_match = re.search(r"库存(?:改到|改成|到|为)?\s*(\d+)", text)
+    if target_match:
+        target_inventory = int(target_match.group(1))
+        if target_inventory >= 0:
+            slots["target_inventory"] = target_inventory
+            return "warehouse.adjust_inventory", slots
+
+    return None, {}
 
 def try_match_customer_list_recent_conversations(text: str) -> tuple[str | None, dict]:
     """Match customer.list_recent_conversations for minimal Chatwoot readonly entry."""

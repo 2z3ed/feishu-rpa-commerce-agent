@@ -2,6 +2,7 @@ import threading
 import time
 import json
 import sys
+import re
 
 import lark_oapi as lark
 from lark_oapi import EventDispatcherHandler, LogLevel
@@ -115,7 +116,11 @@ class FeishuLongConnListener:
 
             # ========== 飞书回执 ==========
             logger.info("=== FEISHU REPLY START === message_id=%s, task_id=%s", message_event.message_id, new_task_id)
-            response_text = f"已接收任务，任务号：{new_task_id}\n当前状态：queued"
+            is_confirm_cmd = bool(re.search(r"(?:确认执行|确认|执行)\s*TASK-[A-Z0-9][A-Z0-9-]{6,}", message_event.text, re.IGNORECASE))
+            if is_confirm_cmd:
+                response_text = f"已接收确认请求，任务号：{new_task_id}\n当前状态：执行中"
+            else:
+                response_text = f"已接收任务，任务号：{new_task_id}\n当前状态：queued"
             reply_success = feishu_client.send_text_reply(
                 message_id=message_event.message_id, 
                 text=response_text
