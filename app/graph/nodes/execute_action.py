@@ -340,6 +340,44 @@ def execute_action(state: dict) -> dict:
             state["backend_selection_reason"] = "p11_add_by_url_chain"
             state["client_profile"] = "b_service_client"
 
+        elif intent_code == "ecom_watch.discovery_search":
+            query = str(slots.get("query") or "").strip()
+            if not query:
+                state["error_message"] = "请输入搜索关键词"
+                state["status"] = "failed"
+                state["result_summary"] = "搜索失败：请输入搜索关键词"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "discovery.search"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_discovery_search_batch_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11b_discovery_chain_empty_query"
+                state["client_profile"] = "b_service_client"
+                return state
+            b_client = BServiceClient()
+            search_result = b_client.discovery_search(query)
+            batch_id = search_result.get("batch_id")
+            if batch_id in (None, ""):
+                raise ValueError("discovery/search 响应缺少 batch_id")
+            batch_result = b_client.get_discovery_batch(batch_id)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_discovery_batch_result(batch_result, query)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "discovery.search"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_discovery_search_batch_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p11b_discovery_chain"
+            state["client_profile"] = "b_service_client"
+
         elif intent_code == "warehouse.query_inventory":
             result = execute_odoo_query_inventory(slots)
             state["status"] = "succeeded"
@@ -610,6 +648,8 @@ def execute_action(state: dict) -> dict:
             state["status"] = "failed"
             if intent_code == "ecom_watch.add_monitor_by_url":
                 state["result_summary"] = f"加入监控失败：{str(e)}"
+            elif intent_code == "ecom_watch.discovery_search":
+                state["result_summary"] = f"搜索失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"
@@ -764,6 +804,39 @@ def format_b_add_monitor_by_url_result(data: dict, url: str) -> str:
         lines.append(f"- 对象ID：{target_id}")
     if status:
         lines.append(f"- 状态：{status}")
+    return "\n".join(lines)
+
+
+def format_b_discovery_batch_result(data: dict, query: str) -> str:
+    batch_id = data.get("batch_id")
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list):
+        candidates = []
+    if not candidates:
+        if batch_id is None:
+            return f"搜索结果：{query}\n暂未找到候选结果。"
+        return f"搜索结果：{query}\n批次：{batch_id}\n暂未找到候选结果。"
+    display_candidates = candidates[:5]
+    lines = [f"搜索结果：{query}"]
+    if batch_id is not None:
+        lines.append(f"批次：{batch_id}")
+    lines.append(f"候选（展示前 {len(display_candidates)} 条）：")
+    for idx, candidate in enumerate(display_candidates, start=1):
+        if not isinstance(candidate, dict):
+            lines.append(f"{idx}. {candidate}")
+            continue
+        title = str(candidate.get("title") or candidate.get("name") or "未命名候选")
+        url = str(candidate.get("url") or candidate.get("product_url") or "N/A")
+        source = str(
+            candidate.get("domain")
+            or candidate.get("site")
+            or candidate.get("source")
+            or candidate.get("source_type")
+            or "未知"
+        )
+        lines.append(f"{idx}. {title}")
+        lines.append(f"   URL: {url}")
+        lines.append(f"   来源: {source}")
     return "\n".join(lines)
 
 

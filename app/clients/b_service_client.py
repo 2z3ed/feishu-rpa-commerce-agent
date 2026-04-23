@@ -38,6 +38,12 @@ class BServiceClient:
     def add_monitor_by_url(self, url: str) -> dict[str, Any]:
         return self._post_envelope_data("/internal/monitor/add-by-url", {"url": url})
 
+    def discovery_search(self, query: str) -> dict[str, Any]:
+        return self._post_envelope_data("/internal/discovery/search", {"query": query})
+
+    def get_discovery_batch(self, batch_id: int | str) -> dict[str, Any]:
+        return self._get_envelope_data(f"/internal/discovery/batches/{batch_id}")
+
     def _get_envelope_data(self, path: str) -> dict[str, Any]:
         return self._request_envelope_data(method="GET", path=path)
 

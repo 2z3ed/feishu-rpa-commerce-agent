@@ -2,15 +2,16 @@
 
 ## 一、阶段结论
 
-P11-A（从 URL 直接加入监控）已通过并收口。
+P11-B（discovery 搜索 + candidate batch）已通过并收口。
 
 本轮结论：
-- A 已完成 URL 加监控意图识别与单字段 `url` 提取
-- A 已稳定调用 B：`POST /internal/monitor/add-by-url`
+- A 已完成 discovery 搜索意图识别与单字段 `query` 提取
+- A 已稳定调用 B：`POST /internal/discovery/search`
+- A 已稳定调用 B：`GET /internal/discovery/batches/{batch_id}`
 - A 已按 Envelope（`ok/data/error`）显式解包
 - 飞书成功/失败文本路径均已成立
-- 联动“看看当前监控对象”可看到新增对象
 - P10 查询链路保持正常
+- P11-A add-by-url 链路保持正常
 
 ## 二、固定真实样本（冻结）
 

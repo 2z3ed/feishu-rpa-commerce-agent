@@ -658,16 +658,14 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P11：A 接 B 纳管最小闭环
+P11：A 接 B 纳管主线
 
 当前阶段先做：
 
-P11-A：从 URL 直接加入监控（最小纳管闭环）
+P11-B：discovery 搜索 + candidate batch
 
 开始任何开发前，先阅读：
 
-- docs/p10/p10-closure-report.md
-- docs/p10/p10-handoff.md
 - docs/p11/p11-project-plan.md
 - docs/p11/P11-agent-prompt.md
 - docs/p11/p11-boss-demo-sop.md

@@ -48,6 +48,25 @@ def test_resolve_add_monitor_by_url_intent_with_invalid_url_candidate():
     assert out["slots"]["url"] == "not-a-url"
 
 
+def test_resolve_discovery_search_intent():
+    state = {"normalized_text": "搜索商品：wireless headphone"}
+    out = resolve_intent(state)
+    assert out["intent_code"] == "ecom_watch.discovery_search"
+    assert out["slots"]["query"] == "wireless headphone"
+
+
+def test_resolve_discovery_search_intent_alt_phrases():
+    state_1 = {"normalized_text": "搜索：iphone case"}
+    out_1 = resolve_intent(state_1)
+    assert out_1["intent_code"] == "ecom_watch.discovery_search"
+    assert out_1["slots"]["query"] == "iphone case"
+
+    state_2 = {"normalized_text": "帮我找一下 privacy screen protector"}
+    out_2 = resolve_intent(state_2)
+    assert out_2["intent_code"] == "ecom_watch.discovery_search"
+    assert out_2["slots"]["query"] == "privacy screen protector"
+
+
 def test_execute_summary_today_success(monkeypatch):
     def _fake_summary(self):
         return {
@@ -104,6 +123,36 @@ def test_execute_add_monitor_by_url_success(monkeypatch):
     assert "对象ID：99" in result["result_summary"]
 
 
+def test_execute_discovery_search_success(monkeypatch):
+    def _fake_discovery_search(self, query: str):
+        assert query == "wireless headphone"
+        return {"batch_id": 12, "query": query}
+
+    def _fake_get_batch(self, batch_id: int):
+        assert batch_id == 12
+        return {
+            "batch_id": 12,
+            "query": "wireless headphone",
+            "candidates": [
+                {"title": "A", "url": "https://a.example", "domain": "a.example"},
+                {"title": "B", "url": "https://b.example", "domain": "b.example"},
+            ],
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.discovery_search", _fake_discovery_search)
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_discovery_batch", _fake_get_batch)
+    state = {
+        "intent_code": "ecom_watch.discovery_search",
+        "slots": {"query": "wireless headphone"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "搜索结果：wireless headphone" in result["result_summary"]
+    assert "批次：12" in result["result_summary"]
+    assert "URL: https://a.example" in result["result_summary"]
+
+
 def test_execute_b_service_error(monkeypatch):
     def _fake_summary_raise(self):
         raise BServiceError("B 服务不可达")
@@ -128,3 +177,18 @@ def test_execute_add_monitor_by_url_b_service_error(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "failed"
     assert "加入监控失败" in result["result_summary"]
+
+
+def test_execute_discovery_search_b_service_error(monkeypatch):
+    def _fake_discovery_raise(self, _query: str):
+        raise BServiceError("B 服务错误：search backend unavailable")
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.discovery_search", _fake_discovery_raise)
+    state = {
+        "intent_code": "ecom_watch.discovery_search",
+        "slots": {"query": "wireless headphone"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "搜索失败" in result["result_summary"]

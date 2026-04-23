@@ -2,9 +2,9 @@
 
 ## 一、交接状态
 
-- 阶段：P11-A（从 URL 直接加入监控）
+- 阶段：P11-B（discovery 搜索 + candidate batch）
 - 状态：已收口，可演示
-- 主线：A 负责飞书入口与文本回写，B 负责 add-by-url 业务服务
+- 主线：A 负责飞书入口与文本回写，B 负责 discovery 业务服务
 
 ## 二、固定运行口径
 
@@ -16,33 +16,31 @@
 
 ## 三、固定验收样本（真实）
 
-1) 成功样本  
-- 用户原文：`监控这个商品：https://example.com/product/abc`  
-- task_id：`TASK-P11A-SUCC-002`  
-- message_id：`om_x100b5195ddb2a8acc37bf94e86bee96`  
-- 回复：  
-  - 已加入监控。  
-  - URL：https://example.com/product/abc  
-  - 名称：abc  
-  - 对象ID：4  
-  - 状态：active
+### 1) 成功样本
+- 用户原文：`搜索商品：蓝牙耳机`
+- task_id：`TASK-20260423-8089C1`
+- 回复原文：
+  - 搜索结果：蓝牙耳机
+  - 批次：4
+  - 候选（展示前 5 条）：
+    1. 藍牙耳機 - Fortress豐澤
+    2. 蓝牙耳机 | 香港蘇寧 SUNING
+    3. 2026年蓝牙耳机选购指南，高性价比蓝牙耳机推荐（4月更新） - 知乎
+    4. 小米耳機| 小米®香港官方商城 - Xiaomi
+    5. 蓝牙耳机_百度百科
 
-2) 失败样本  
-- 用户原文：`监控这个商品：not-a-url`  
-- task_id：`TASK-P11A-FAIL-002`  
-- message_id：`om_x100b5195dd466ca0c33b9aaee23cab5`  
-- 回复：  
-  - 加入监控失败：B 服务错误：invalid url: only http/https/mock:// are supported (code=HTTP_400, status=400)
+### 2) 失败样本
+- 用户原文：`搜索商品：`
+- task_id：`TASK-20260423-8765A3`
+- 回复原文：`搜索失败：请输入搜索关键词`
 
-3) 联动验证样本  
-- 用户原文：`看看当前监控对象`  
-- task_id：`TASK-P11A-P10T-002`  
-- 结果：列表中出现 `#4 abc（active）`
-
-4) P10 回归样本  
-- 用户原文：`今天有什么变化`  
-- task_id：`TASK-P11A-P10S-002`  
+### 3) 回归验证样本
+- 用户原文：`今天有什么变化`
 - 结果：查询链路正常
+
+### 4) 联动验证样本
+- 用户原文：`看看当前监控对象`
+- 结果：P10 / P11-A 链路保持正常
 
 ## 四、后移项（不要提前开工）
 
