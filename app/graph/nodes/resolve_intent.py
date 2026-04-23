@@ -41,6 +41,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_product_detail(normalized_text)
 
+    # P11-A: add monitor target directly by URL.
+    if not intent_code:
+        intent_code, slots = try_match_b_add_monitor_by_url(normalized_text)
+
     # Try to match warehouse.adjust_inventory (P6.1 Odoo high-risk write sample)
     if not intent_code:
         intent_code, slots = try_match_warehouse_adjust_inventory(normalized_text)
@@ -96,6 +100,19 @@ def try_match_b_product_detail(text: str) -> tuple[str | None, dict]:
     if not product_match:
         return None, {}
     return "ecom_watch.product_detail", {"product_id": int(product_match.group(1))}
+
+
+def try_match_b_add_monitor_by_url(text: str) -> tuple[str | None, dict]:
+    command_prefixes = ("监控这个商品：", "把这个链接加入监控：", "加入监控：")
+    for prefix in command_prefixes:
+        if prefix not in text:
+            continue
+        # P11-A: capture the raw single URL slot candidate and let B validate.
+        candidate = text.split(prefix, 1)[1].strip()
+        if not candidate:
+            return None, {}
+        return "ecom_watch.add_monitor_by_url", {"url": candidate}
+    return None, {}
 
 
 def try_match_product_query_sku_status(text: str) -> Tuple[Optional[str], Dict[str, Any]]:

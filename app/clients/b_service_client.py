@@ -35,9 +35,24 @@ class BServiceClient:
     def get_product_detail(self, product_id: int) -> dict[str, Any]:
         return self._get_envelope_data(f"/internal/products/{product_id}/detail")
 
+    def add_monitor_by_url(self, url: str) -> dict[str, Any]:
+        return self._post_envelope_data("/internal/monitor/add-by-url", {"url": url})
+
     def _get_envelope_data(self, path: str) -> dict[str, Any]:
+        return self._request_envelope_data(method="GET", path=path)
+
+    def _post_envelope_data(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request_envelope_data(method="POST", path=path, json_payload=payload)
+
+    def _request_envelope_data(
+        self,
+        *,
+        method: str,
+        path: str,
+        json_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
-            response = self._client.get(path)
+            response = self._client.request(method=method, url=path, json=json_payload)
         except httpx.HTTPError as exc:
             raise BServiceError(f"B 服务不可达，请确认 {self.base_url} 已启动：{exc}") from exc
 

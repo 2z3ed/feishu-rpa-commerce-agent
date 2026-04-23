@@ -320,6 +320,26 @@ def execute_action(state: dict) -> dict:
             state["backend_selection_reason"] = "p10_query_chain"
             state["client_profile"] = "b_service_client"
 
+        elif intent_code == "ecom_watch.add_monitor_by_url":
+            url = str(slots.get("url") or "").strip()
+            if not url:
+                raise ValueError("缺少 url")
+            b_client = BServiceClient()
+            result = b_client.add_monitor_by_url(url)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_add_monitor_by_url_result(result, url)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.add_by_url"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_add_by_url_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p11_add_by_url_chain"
+            state["client_profile"] = "b_service_client"
+
         elif intent_code == "warehouse.query_inventory":
             result = execute_odoo_query_inventory(slots)
             state["status"] = "succeeded"
@@ -588,7 +608,10 @@ def execute_action(state: dict) -> dict:
         if isinstance(e, BServiceError):
             state["error_message"] = str(e)
             state["status"] = "failed"
-            state["result_summary"] = f"查询失败：{str(e)}"
+            if intent_code == "ecom_watch.add_monitor_by_url":
+                state["result_summary"] = f"加入监控失败：{str(e)}"
+            else:
+                state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"
             state["provider_id"] = "ecom_watch"
             state["capability"] = intent_code
@@ -722,6 +745,25 @@ def format_b_product_detail_result(data: dict, product_id: int) -> str:
     ]
     if summary:
         lines.append(f"- 摘要：{summary}")
+    return "\n".join(lines)
+
+
+def format_b_add_monitor_by_url_result(data: dict, url: str) -> str:
+    target = None
+    targets = data.get("targets")
+    if isinstance(targets, list) and targets:
+        target = targets[0] if isinstance(targets[0], dict) else None
+    source = target if isinstance(target, dict) else data
+    name = source.get("name") or source.get("product_name") or source.get("title")
+    target_id = source.get("target_id") or source.get("id") or source.get("product_id")
+    status = source.get("status") or ("active" if source.get("is_active", True) else "inactive")
+    lines = ["已加入监控。", f"- URL：{url}"]
+    if name:
+        lines.append(f"- 名称：{name}")
+    if target_id is not None:
+        lines.append(f"- 对象ID：{target_id}")
+    if status:
+        lines.append(f"- 状态：{status}")
     return "\n".join(lines)
 
 
