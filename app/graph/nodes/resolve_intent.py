@@ -28,7 +28,19 @@ def resolve_intent(state: dict) -> dict:
     
     # Try to match confirmation command first
     intent_code, slots = try_match_confirmation_command(normalized_text)
-    
+
+    # P10: query today summary from B service.
+    if not intent_code:
+        intent_code, slots = try_match_b_today_summary(normalized_text)
+
+    # P10: query monitor targets from B service.
+    if not intent_code:
+        intent_code, slots = try_match_b_monitor_targets(normalized_text)
+
+    # P10: query product detail from B service.
+    if not intent_code:
+        intent_code, slots = try_match_b_product_detail(normalized_text)
+
     # Try to match warehouse.adjust_inventory (P6.1 Odoo high-risk write sample)
     if not intent_code:
         intent_code, slots = try_match_warehouse_adjust_inventory(normalized_text)
@@ -59,6 +71,31 @@ def resolve_intent(state: dict) -> dict:
         logger.info("Unknown intent: text='%s'", normalized_text[:100])
     
     return state
+
+
+def try_match_b_today_summary(text: str) -> tuple[str | None, dict]:
+    summary_keywords = ("今天有什么变化", "看看今天摘要", "今日监控摘要")
+    if any(keyword in text for keyword in summary_keywords):
+        return "ecom_watch.summary_today", {}
+    return None, {}
+
+
+def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
+    monitor_keywords = ("看看当前监控对象", "当前监控哪些商品", "监控列表")
+    if any(keyword in text for keyword in monitor_keywords):
+        return "ecom_watch.monitor_targets", {}
+    return None, {}
+
+
+def try_match_b_product_detail(text: str) -> tuple[str | None, dict]:
+    if "商品" not in text and "product" not in text.lower():
+        return None, {}
+    if not any(k in text for k in ("详情", "查看", "看看", "怎么样")):
+        return None, {}
+    product_match = re.search(r"(?:商品|product)\s*(\d+)", text, re.IGNORECASE)
+    if not product_match:
+        return None, {}
+    return "ecom_watch.product_detail", {"product_id": int(product_match.group(1))}
 
 
 def try_match_product_query_sku_status(text: str) -> Tuple[Optional[str], Dict[str, Any]]:

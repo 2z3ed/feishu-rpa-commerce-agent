@@ -98,12 +98,15 @@ def finalize_result(state: dict) -> dict:
         return state
 
     status = state.get("status", "processing")
+    intent_code = str(state.get("intent_code") or "").strip()
+    append_rag_footer = not intent_code.startswith("ecom_watch.")
 
     # RAG use case 3: failure explanation (does not change status / error fields)
     state.setdefault("rag_failure_footer", "")
     state.setdefault("rag_failure_fallback", True)
     if (
         status == "failed"
+        and append_rag_footer
         and settings.ENABLE_RAG
         and settings.RAG_USE_CASE_ENABLED_FAILURE_EXPLANATION
     ):
@@ -144,14 +147,15 @@ def finalize_result(state: dict) -> dict:
                 )
 
     summary = state.get("result_summary", "")
-    rag_keys = ["rag_command_footer", "rag_rule_footer", "rag_failure_footer"]
-    if status == "failed":
-        # Do not append command_interpretation on failed tasks (failure_explanation / rule only).
-        rag_keys = ["rag_rule_footer", "rag_failure_footer"]
-    for key in rag_keys:
-        extra = state.get(key) or ""
-        if extra:
-            summary += extra
+    if append_rag_footer:
+        rag_keys = ["rag_command_footer", "rag_rule_footer", "rag_failure_footer"]
+        if status == "failed":
+            # Do not append command_interpretation on failed tasks (failure_explanation / rule only).
+            rag_keys = ["rag_rule_footer", "rag_failure_footer"]
+        for key in rag_keys:
+            extra = state.get(key) or ""
+            if extra:
+                summary += extra
     state["result_summary"] = summary
 
     db = SessionLocal()

@@ -658,14 +658,11 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P9-E：飞书前台老板演示闭环
+P10：A 接 B 最小集成验证
 
 开始任何开发前，先阅读：
 
-- docs/p9d/p9d-closure-report.md
-- docs/p9d/p9d-handoff.md
-- docs/p9e/p9e-project-plan.md
-- docs/p9e/P9-E-agent-prompt.md
-- docs/p9e/p9e-boss-demo-sop.md
-- docs/p9e/p9e-acceptance-checklist.md
-- docs/p9d/P9-D-agent-prompt.md
+- docs/p10/p10-project-plan.md
+- docs/p10/P10-agent-prompt.md
+- docs/p10/p10-boss-demo-sop.md
+- docs/p10/p10-acceptance-checklist.md

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # 群聊 @ 机器人判定：im.message.receive_v1 的 mentions 为 mention_event（仅 key/id/name/tenant_key），
     # 需与 mentions[].id.open_id 比对；请在开放平台「我的应用」或相关接口获取本应用机器人的 open_id。
     FEISHU_BOT_OPEN_ID: str = ""
+    B_SERVICE_BASE_URL: str = "http://127.0.0.1:8005"
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

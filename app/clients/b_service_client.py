@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from app.core.config import settings
+
+
+class BServiceError(RuntimeError):
+    """B service integration error with user-readable message."""
+
+
+@dataclass
+class EnvelopeError:
+    message: str
+    code: str
+    status_code: int
+    request_id: str
+    timestamp: str
+
+
+class BServiceClient:
+    def __init__(self, base_url: str | None = None, timeout_seconds: float = 5.0):
+        self.base_url = (base_url or settings.B_SERVICE_BASE_URL).rstrip("/")
+        self._client = httpx.Client(base_url=self.base_url, timeout=timeout_seconds)
+
+    def get_today_summary(self) -> dict[str, Any]:
+        return self._get_envelope_data("/internal/summary/today")
+
+    def get_monitor_targets(self) -> dict[str, Any]:
+        return self._get_envelope_data("/internal/monitor/targets")
+
+    def get_product_detail(self, product_id: int) -> dict[str, Any]:
+        return self._get_envelope_data(f"/internal/products/{product_id}/detail")
+
+    def _get_envelope_data(self, path: str) -> dict[str, Any]:
+        try:
+            response = self._client.get(path)
+        except httpx.HTTPError as exc:
+            raise BServiceError(f"B 服务不可达，请确认 {self.base_url} 已启动：{exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise BServiceError("B 服务返回了无法解析的 JSON 响应") from exc
+
+        if not isinstance(payload, dict):
+            raise BServiceError("B 服务返回格式错误：不是 Envelope 对象")
+
+        ok = bool(payload.get("ok"))
+        if ok:
+            data = payload.get("data")
+            if data is None:
+                return {}
+            if not isinstance(data, dict):
+                raise BServiceError("B 服务返回格式错误：data 不是对象")
+            return data
+
+        err = payload.get("error")
+        if isinstance(err, dict):
+            envelope_error = EnvelopeError(
+                message=str(err.get("message") or "未知错误"),
+                code=str(err.get("code") or "unknown_error"),
+                status_code=int(err.get("status_code") or response.status_code or 500),
+                request_id=str(err.get("request_id") or ""),
+                timestamp=str(err.get("timestamp") or ""),
+            )
+            raise BServiceError(
+                f"B 服务错误：{envelope_error.message} "
+                f"(code={envelope_error.code}, status={envelope_error.status_code})"
+            )
+
+        raise BServiceError(f"B 服务错误：HTTP {response.status_code}")
+

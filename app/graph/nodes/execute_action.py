@@ -29,6 +29,7 @@ from app.rpa.confirm_update_price import (
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
 from app.utils.task_logger import log_step
+from app.clients.b_service_client import BServiceClient, BServiceError
 
 
 def _extract_confirm_failure_layer(result: dict) -> str:
@@ -264,6 +265,60 @@ def execute_action(state: dict) -> dict:
             state["status"] = "succeeded"
             state["platform"] = result.get("platform", state.get("platform", "mock"))
             logger.info("Product query executed successfully: sku=%s", slots.get('sku'))
+
+        elif intent_code == "ecom_watch.summary_today":
+            b_client = BServiceClient()
+            result = b_client.get_today_summary()
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_today_summary_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "summary.today"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_summary_today_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p10_query_chain"
+            state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.monitor_targets":
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_monitor_targets_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.targets"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p10_query_chain"
+            state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.product_detail":
+            product_id = slots.get("product_id")
+            if product_id is None:
+                raise ValueError("缺少 product_id")
+            b_client = BServiceClient()
+            result = b_client.get_product_detail(int(product_id))
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_product_detail_result(result, int(product_id))
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "products.detail"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_product_detail_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p10_query_chain"
+            state["client_profile"] = "b_service_client"
 
         elif intent_code == "warehouse.query_inventory":
             result = execute_odoo_query_inventory(slots)
@@ -530,6 +585,18 @@ def execute_action(state: dict) -> dict:
             logger.warning("Intent not implemented: %s", intent_code)
             
     except Exception as e:
+        if isinstance(e, BServiceError):
+            state["error_message"] = str(e)
+            state["status"] = "failed"
+            state["result_summary"] = f"查询失败：{str(e)}"
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = intent_code
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p10_query_chain_error"
+            return state
         if intent_code == "product.query_sku_status" and execution_mode == "api":
             state["execution_backend"] = getattr(executor, "get_selected_backend", lambda: state.get("execution_backend", "sandbox_http_client"))()
             state["selected_backend"] = state["execution_backend"]
@@ -583,6 +650,79 @@ def execute_action(state: dict) -> dict:
         )
     
     return state
+
+
+def format_b_today_summary_result(data: dict) -> str:
+    if not data:
+        return "今日监控摘要暂无数据。"
+    total = int(data.get("total_monitored_products") or 0)
+    changed = int(data.get("changed_products_count") or 0)
+    high_priority = int(data.get("high_priority_count") or 0)
+    lines = [
+        "今日监控摘要：",
+        f"- 今日监控商品数：{total}",
+        f"- 今日变化商品数：{changed}",
+        f"- 高优先级数量：{high_priority}",
+    ]
+    top_items = data.get("top_items") if isinstance(data.get("top_items"), list) else []
+    suggested_actions = (
+        data.get("suggested_actions")
+        if isinstance(data.get("suggested_actions"), list)
+        else []
+    )
+    if changed == 0 and high_priority == 0 and not top_items:
+        lines.append("- 今日暂无异常变化。")
+    else:
+        if top_items:
+            lines.append("- 今日重点变化：")
+            for idx, item in enumerate(top_items[:3], start=1):
+                if isinstance(item, dict):
+                    name = item.get("product_name") or item.get("name") or item.get("title") or "未命名商品"
+                    desc = item.get("change_summary") or item.get("summary") or item.get("status") or "有变化"
+                    lines.append(f"  {idx}. {name}：{desc}")
+                else:
+                    lines.append(f"  {idx}. {item}")
+        if suggested_actions:
+            lines.append("- 建议动作：")
+            for idx, action in enumerate(suggested_actions[:3], start=1):
+                lines.append(f"  {idx}. {action}")
+    return "\n".join(lines)
+
+
+def format_b_monitor_targets_result(data: dict) -> str:
+    targets = data.get("targets")
+    if not isinstance(targets, list):
+        targets = data.get("items") if isinstance(data.get("items"), list) else []
+    if not targets:
+        return "当前没有活跃监控对象。"
+    lines = [f"当前监控对象（共 {len(targets)} 个）："]
+    for item in targets[:10]:
+        if isinstance(item, dict):
+            pid = item.get("id") or item.get("product_id") or "N/A"
+            name = item.get("name") or item.get("product_name") or "未命名"
+            status = item.get("status") or ("active" if item.get("is_active", True) else "inactive")
+            lines.append(f"- #{pid} {name}（{status}）")
+        else:
+            lines.append(f"- {item}")
+    return "\n".join(lines)
+
+
+def format_b_product_detail_result(data: dict, product_id: int) -> str:
+    if not data:
+        return f"商品 {product_id} 暂无详情数据。"
+    name = data.get("name") or data.get("product_name") or "未命名"
+    status = data.get("status") or ("active" if data.get("is_active", True) else "inactive")
+    price = data.get("price") if data.get("price") is not None else "N/A"
+    summary = data.get("summary") or data.get("latest_summary") or ""
+    lines = [
+        f"商品详情 #{product_id}",
+        f"- 名称：{name}",
+        f"- 状态：{status}",
+        f"- 价格：{price}",
+    ]
+    if summary:
+        lines.append(f"- 摘要：{summary}")
+    return "\n".join(lines)
 
 
 def execute_product_query_sku_status(executor, slots: dict, execution_mode: str) -> dict:
