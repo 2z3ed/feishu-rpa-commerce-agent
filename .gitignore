@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 tmp/
 feishu_rpa.db
+
+tools/nonprod_admin_stub/data/nonprod_stub.db
