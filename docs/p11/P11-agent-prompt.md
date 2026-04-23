@@ -2,189 +2,103 @@
 
 你现在接手的是 feishu-rpa-commerce-agent 项目。
 
-当前不要发散，也不要误判主线。
+当前主线已经完成收口，不要误判阶段目标。
 
-## 一、你必须先接受的当前真实状态
+## 一、当前真实状态（冻结）
 
-当前阶段不是继续做 P11-A 的 add-by-url。
-P11-A 已经完成并收口。
+当前阶段结论：
 
-当前唯一主线已经切换为：
+P11-C：add-from-candidates 编号选择最小闭环 **已通过并收口**。
 
-P11-B：discovery 搜索 + candidate batch
+已成立：
+- 发现 → 编号选择 → 正式纳管闭环已成立
+- 无上下文失败路径已成立
+- A/B 分工未破坏
 
-当前目标不是“直接纳管”，
-而是先让老板在飞书里搜出候选结果。
-
-P11-B 已通过并收口，当前不再继续改业务代码，只做文档整理与阶段交接。
-
-## 二、开始前必须先读
-
-先读上一阶段收口材料：
-
-1. docs/p11/p11-closure-report.md
-2. docs/p11/p11-handoff.md
-
-再读当前阶段文件：
-
-3. docs/p11/p11-project-plan.md
-4. docs/p11/P11-agent-prompt.md
-5. docs/p11/p11-boss-demo-sop.md
-6. docs/p11/p11-acceptance-checklist.md
-
-如果文件名与预期不一致，先执行：
-- ls -la docs/p11
-
-确认真实文件名后继续。
-不要停在“找文件”这一步空转。
-
-## 三、当前固定分工（必须继承）
+## 二、固定分工（继续继承）
 
 A 负责：
-- 接收飞书消息
-- 解析老板意图
+- 飞书入口
+- 意图识别
+- 最小会话上下文
 - 调用 B
-- 把结果翻译成老板可读文本
+- 老板可读文本回写
 
 B 负责：
 - discovery
-- candidate_batches
-- candidate_items
+- candidate_batches / candidate_items
 - add-from-candidates
 - add-by-url
-- summary / detail / monitor targets
+- summary / detail / targets
 - 管理动作
 
-不要把 A / B 合并成一个项目。
+不要把 A/B 合并成一个项目。
 
-## 四、本轮唯一目标
+## 三、固定运行口径
 
-只打通：
+- B 服务地址：`http://127.0.0.1:8005`
+- A 调 B 必须按 Envelope 解包：`ok/data/error`
+- 当前前台形态仍为飞书文本回复
 
-1. POST /internal/discovery/search
-2. GET /internal/discovery/batches/{batch_id}
+## 四、固定样本（本阶段冻结）
 
-形成最小闭环：
+### 1) 无上下文失败样本
+- 飞书原文：`加入监控第 2 个`
+- task_id：`TASK-20260423-A74551`
+- 回复原文：`加入监控失败：未找到最近一次搜索结果，请先发送“搜索商品：关键词”`
 
-老板在飞书里发搜索词
-→ A 识别为 discovery 搜索
-→ A 调 B discovery/search
-→ A 拿到 batch_id
-→ A 调 B discovery/batches/{batch_id}
-→ A 返回候选列表文本
+### 2) discovery 成功样本
+- 飞书原文：`搜索商品：蓝牙耳机`
+- task_id：`TASK-20260423-FFC984`
+- 回复原文：
+  - `搜索结果：蓝牙耳机`
+  - `批次：8`
+  - `候选（展示前 5 条）：`
+    1. `藍牙耳機 - Fortress豐澤`
+    2. `蓝牙耳机| 香港蘇寧SUNING`
+    3. `小米耳機| 小米®香港官方商城 - Xiaomi`
+    4. `AirPods - Apple (香港)`
+    5. `2026年真無線藍牙耳機推薦！依用途精選13款高評價藍牙耳機`
 
-## 五、本轮固定口径
+### 3) 编号纳管成功样本
+- 飞书原文：`加入监控第 2 个`
+- task_id：`TASK-20260423-544156`
+- 回复原文：
+  - `已加入监控。`
+  - `选择编号：第 2 个`
+  - `名称：蓝牙耳机 | 香港蘇寧 SUNING`
+  - `URL：https://search.hksuning.com/search/result?keyword=%E8%93%9D%E7%89%99%E8%80%B3%E6%9C%BA`
+  - `对象ID：5`
+  - `状态：active`
 
-### B 服务地址
-固定：
-- http://127.0.0.1:8005
+### 4) 联动验证样本
+- 飞书原文：`看看当前监控对象`
+- task_id：`TASK-20260423-6FAF67`
+- 回复原文：
+  - `当前监控对象（共 5 个）：`
+  - `#1 Mock Phone X（inactive）`
+  - `#2 Mock Headphone Pro（active）`
+  - `#3 Mock Keyboard Mini（active）`
+  - `#4 abc（active）`
+  - `#5 蓝牙耳机 | 香港蘇寧 SUNING（active）`
 
-### Envelope 解包
-A 调 B 继续按：
-- ok
-- data
-- error
+## 五、当前明确不要做
 
-显式解包。
-
-### 飞书回复形态
-本轮先只做：
-- 文本回复
-
-### 命令口径
-当前只支持：
-- 搜索商品：xxx
-- 帮我找一下 xxx
-- 搜索：xxx
-
-只解析：
-- query
-
-## 六、本轮你只允许先做这些事
-
-### P11-B.0：discovery 锚定
-先确认：
-- B 的 search 是否可调用
-- B 的 batch 查询是否可调用
-- 成功 / 失败 Envelope 长什么样
-- batch_id 怎么拿
-- candidate 的最小字段有哪些
-
-### P11-B.1：飞书搜索命令接入
-只做：
-- 最小搜索命令口径
-- 最小 query 提取
-- 最小意图识别
-
-### P11-B.2：候选结果文本化
-只做：
-- 前 3~5 条候选结果展示
-- 名称 / URL / 来源 / batch_id（若有）
-- 老板可读文本
-- 不返回原始 JSON
-- 不返回 Python 堆栈
-
-### P11-B.3：最小实机验收
-只验证：
-- 飞书前台真实搜索命令
-- A 真实调到 B 的 discovery
-- 飞书收到候选列表文本
-- 失败文本也老板可读
-
-## 七、当前明确不要做
-
-当前禁止做：
-
-- 不接 add-from-candidates
-- 不做候选编号选择
-- 不做 add-by-url 扩展
-- 不做 pause / resume / delete
+- 不再改 P11-C 业务逻辑
 - 不做卡片交互
-- 不做共享数据库
+- 不做分页
+- 不做 pause / resume / delete
 - 不切 PostgreSQL
-- 不回头改 P10 / P11-A 已收口链路
-- 不做 discovery 大重构
+- 不开新主线代码开发
 
-## 八、工作方式要求
+## 六、后移项
 
-你必须先检查仓库当前真实状态，再做最小改动。
+- P11-D：monitor 管理动作（pause/resume/delete）
+- 卡片正式交互继续后移
+- PostgreSQL 不属于当前范围
 
-每完成一小段，都必须按这个格式回报：
+## 七、下一阶段候选方向（仅方向，不开工）
 
-A. 本轮做了什么
-B. 改了哪些文件
-C. 如何启动 / 复验
-D. 是否通过
-E. 下一步建议
-
-不允许：
-
-- 只给计划，不给结果
-- 只贴 diff，不给中文结论
-- 输出其他语言
-- 直接跳去做 add-from-candidates
-
-## 九、输出语言要求
-
-- 只允许使用简体中文输出
-- 命令、路径、代码可保留原文
-- 解释、结论必须全部使用简体中文
-
-## 十、你下一条回复必须严格按这个格式
-
-A. 先读了哪些文件
-B. 当前 discovery 锚定结果
-C. 本轮实际执行了哪些命令
-D. 改了哪些文件
-E. discovery/search 是否已接入
-F. discovery/batch 是否已接入
-G. 飞书搜索命令是否已能触发候选列表
-H. 当前阶段结论
-I. 下一步建议
-
-判断标准只有 4 个：
-
-- A 能调 B 的 discovery
-- A 能解包 Envelope
-- 老板能在飞书里看到候选结果
-- 不破坏 P10 / P11-A 已收口主线
+1. P11-D：monitor 管理动作（pause/resume/delete）
+2. 飞书卡片正式交互
+3. PostgreSQL 切换与回归验证

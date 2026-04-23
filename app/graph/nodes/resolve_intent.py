@@ -49,6 +49,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_discovery_search(normalized_text)
 
+    # P11-C: add monitor target from latest discovery candidates by index.
+    if not intent_code:
+        intent_code, slots = try_match_b_add_from_candidates(normalized_text)
+
     # Try to match warehouse.adjust_inventory (P6.1 Odoo high-risk write sample)
     if not intent_code:
         intent_code, slots = try_match_warehouse_adjust_inventory(normalized_text)
@@ -131,6 +135,20 @@ def try_match_b_discovery_search(text: str) -> tuple[str | None, dict]:
     if text.startswith("帮我找一下"):
         query = text[len("帮我找一下"):].strip()
         return "ecom_watch.discovery_search", {"query": query}
+    return None, {}
+
+
+def try_match_b_add_from_candidates(text: str) -> tuple[str | None, dict]:
+    patterns = (
+        r"^加入监控第\s*(\d+)\s*个$",
+        r"^监控第\s*(\d+)\s*个$",
+        r"^选第\s*(\d+)\s*个加入监控$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        return "ecom_watch.add_from_candidates", {"index": int(match.group(1))}
     return None, {}
 
 

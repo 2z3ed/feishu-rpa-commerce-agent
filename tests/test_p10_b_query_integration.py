@@ -67,6 +67,23 @@ def test_resolve_discovery_search_intent_alt_phrases():
     assert out_2["slots"]["query"] == "privacy screen protector"
 
 
+def test_resolve_add_from_candidates_intent():
+    state_1 = {"normalized_text": "加入监控第 2 个"}
+    out_1 = resolve_intent(state_1)
+    assert out_1["intent_code"] == "ecom_watch.add_from_candidates"
+    assert out_1["slots"]["index"] == 2
+
+    state_2 = {"normalized_text": "监控第 1 个"}
+    out_2 = resolve_intent(state_2)
+    assert out_2["intent_code"] == "ecom_watch.add_from_candidates"
+    assert out_2["slots"]["index"] == 1
+
+    state_3 = {"normalized_text": "选第 3 个加入监控"}
+    out_3 = resolve_intent(state_3)
+    assert out_3["intent_code"] == "ecom_watch.add_from_candidates"
+    assert out_3["slots"]["index"] == 3
+
+
 def test_execute_summary_today_success(monkeypatch):
     def _fake_summary(self):
         return {
@@ -151,6 +168,61 @@ def test_execute_discovery_search_success(monkeypatch):
     assert "搜索结果：wireless headphone" in result["result_summary"]
     assert "批次：12" in result["result_summary"]
     assert "URL: https://a.example" in result["result_summary"]
+
+
+def test_execute_add_from_candidates_success(monkeypatch):
+    def _fake_load_latest_context(*, chat_id: str, user_open_id: str):
+        assert chat_id == "chat-1"
+        assert user_open_id == "user-1"
+        return {
+            "batch_id": 12,
+            "source_type": "discovery",
+            "candidates": [
+                {"candidate_id": 1001, "title": "A 商品", "url": "https://a.example"},
+                {"candidate_id": 1002, "title": "B 商品", "url": "https://b.example"},
+            ],
+        }
+
+    def _fake_add_from_candidates(self, *, batch_id: int, candidate_ids: list[int], source_type: str | None = None):
+        assert batch_id == 12
+        assert candidate_ids == [1002]
+        assert source_type == "discovery"
+        return {
+            "count": 1,
+            "targets": [{"id": 77, "name": "B 商品", "url": "https://b.example", "status": "active"}],
+        }
+
+    monkeypatch.setattr("app.graph.nodes.execute_action._load_latest_discovery_context", _fake_load_latest_context)
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.add_from_candidates", _fake_add_from_candidates)
+    state = {
+        "intent_code": "ecom_watch.add_from_candidates",
+        "slots": {"index": 2},
+        "status": "processing",
+        "source_chat_id": "chat-1",
+        "user_open_id": "user-1",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "已加入监控" in result["result_summary"]
+    assert "第 2 个" in result["result_summary"]
+    assert "对象ID：77" in result["result_summary"]
+
+
+def test_execute_add_from_candidates_missing_context(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action._load_latest_discovery_context",
+        lambda **_: None,
+    )
+    state = {
+        "intent_code": "ecom_watch.add_from_candidates",
+        "slots": {"index": 2},
+        "status": "processing",
+        "source_chat_id": "chat-1",
+        "user_open_id": "user-1",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "未找到最近一次搜索结果" in result["result_summary"]
 
 
 def test_execute_b_service_error(monkeypatch):

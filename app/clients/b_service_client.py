@@ -44,6 +44,21 @@ class BServiceClient:
     def get_discovery_batch(self, batch_id: int | str) -> dict[str, Any]:
         return self._get_envelope_data(f"/internal/discovery/batches/{batch_id}")
 
+    def add_from_candidates(
+        self,
+        *,
+        batch_id: int,
+        candidate_ids: list[int],
+        source_type: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "batch_id": int(batch_id),
+            "candidate_ids": [int(candidate_id) for candidate_id in candidate_ids],
+        }
+        if source_type:
+            payload["source_type"] = source_type
+        return self._post_envelope_data("/internal/monitor/add-from-candidates", payload)
+
     def _get_envelope_data(self, path: str) -> dict[str, Any]:
         return self._request_envelope_data(method="GET", path=path)
 

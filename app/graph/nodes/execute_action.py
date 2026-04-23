@@ -7,7 +7,7 @@ import json
 import re
 from app.core.logging import logger
 from app.db.session import SessionLocal
-from app.db.models import TaskRecord
+from app.db.models import TaskRecord, TaskStep
 from app.core.time import get_shanghai_now
 from app.executors import get_product_executor, resolve_execution_mode, resolve_query_platform
 from app.clients.woo_readonly_prep import get_woo_rollout_policy
@@ -30,6 +30,8 @@ from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
 from app.utils.task_logger import log_step
 from app.clients.b_service_client import BServiceClient, BServiceError
+
+_DISCOVERY_CONTEXT_STEP_CODE = "discovery_context_saved"
 
 
 def _extract_confirm_failure_layer(result: dict) -> str:
@@ -65,6 +67,87 @@ def _evaluate_adjust_inventory_gate(slots: dict) -> tuple[bool, str]:
     if delta == 0 and target_inventory == 0:
         return False, "delta_or_target_inventory_required"
     return True, "allow"
+
+
+def _extract_discovery_candidate_minimal(candidate: dict) -> dict | None:
+    if not isinstance(candidate, dict):
+        return None
+    candidate_id = candidate.get("candidate_id")
+    if candidate_id in (None, ""):
+        candidate_id = candidate.get("id")
+    if candidate_id in (None, ""):
+        return None
+    return {
+        "candidate_id": int(candidate_id),
+        "title": str(candidate.get("title") or candidate.get("name") or "未命名候选"),
+        "url": str(candidate.get("url") or candidate.get("product_url") or ""),
+    }
+
+
+def _build_discovery_context(*, batch_data: dict, query: str) -> dict:
+    batch_id = batch_data.get("batch_id")
+    source_type = batch_data.get("source_type")
+    raw_candidates = batch_data.get("candidates")
+    candidates: list[dict] = []
+    if isinstance(raw_candidates, list):
+        for candidate in raw_candidates:
+            minimal = _extract_discovery_candidate_minimal(candidate)
+            if minimal is not None:
+                candidates.append(minimal)
+    return {
+        "batch_id": int(batch_id) if batch_id not in (None, "") else None,
+        "source_type": str(source_type or "discovery"),
+        "query": query,
+        "candidates": candidates,
+    }
+
+
+def _save_discovery_context(*, task_id: str, state: dict, context: dict) -> None:
+    payload = {
+        "chat_id": str(state.get("source_chat_id") or ""),
+        "user_open_id": str(state.get("user_open_id") or ""),
+        "batch_id": context.get("batch_id"),
+        "source_type": context.get("source_type"),
+        "query": context.get("query"),
+        "candidates": context.get("candidates"),
+    }
+    log_step(
+        task_id,
+        _DISCOVERY_CONTEXT_STEP_CODE,
+        "success",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def _load_latest_discovery_context(*, chat_id: str, user_open_id: str) -> dict | None:
+    if not chat_id:
+        return None
+    db = SessionLocal()
+    try:
+        query = (
+            db.query(TaskStep.detail)
+            .join(TaskRecord, TaskRecord.task_id == TaskStep.task_id)
+            .filter(
+                TaskStep.step_code == _DISCOVERY_CONTEXT_STEP_CODE,
+                TaskRecord.chat_id == chat_id,
+                TaskRecord.status == "succeeded",
+            )
+            .order_by(TaskStep.created_at.desc())
+        )
+        if user_open_id:
+            query = query.filter(TaskRecord.user_open_id == user_open_id)
+        row = query.first()
+        if not row:
+            return None
+        raw_detail = row[0] if isinstance(row, tuple) else getattr(row, "detail", "")
+        payload = json.loads(raw_detail or "{}")
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+    finally:
+        db.close()
 
 
 def _apply_adjust_inventory_governance_baseline(state: dict, result: dict | None = None) -> None:
@@ -364,6 +447,10 @@ def execute_action(state: dict) -> dict:
             if batch_id in (None, ""):
                 raise ValueError("discovery/search 响应缺少 batch_id")
             batch_result = b_client.get_discovery_batch(batch_id)
+            context = _build_discovery_context(batch_data=batch_result, query=query)
+            if context.get("batch_id") is None:
+                raise ValueError("discovery/batches 响应缺少 batch_id")
+            _save_discovery_context(task_id=task_id, state=state, context=context)
             state["status"] = "succeeded"
             state["result_summary"] = format_b_discovery_batch_result(batch_result, query)
             state["platform"] = "ecom_watch"
@@ -376,6 +463,100 @@ def execute_action(state: dict) -> dict:
             state["selected_backend"] = "httpx_b_service"
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p11b_discovery_chain"
+            state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.add_from_candidates":
+            raw_index = slots.get("index")
+            try:
+                selected_index = int(raw_index)
+            except Exception:
+                selected_index = 0
+            if selected_index <= 0:
+                state["error_message"] = "编号必须是大于 0 的整数"
+                state["status"] = "failed"
+                state["result_summary"] = "加入监控失败：编号必须是大于 0 的整数"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.add_from_candidates"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_add_from_candidates_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11c_add_from_candidates_invalid_index"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            context = _load_latest_discovery_context(
+                chat_id=str(state.get("source_chat_id") or ""),
+                user_open_id=str(state.get("user_open_id") or ""),
+            )
+            if not context:
+                state["error_message"] = "未找到最近一次搜索结果"
+                state["status"] = "failed"
+                state["result_summary"] = "加入监控失败：未找到最近一次搜索结果，请先发送“搜索商品：关键词”"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.add_from_candidates"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_add_from_candidates_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11c_add_from_candidates_missing_context"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            candidates = context.get("candidates") if isinstance(context.get("candidates"), list) else []
+            if selected_index > len(candidates):
+                state["error_message"] = f"编号超出范围（当前最多 {len(candidates)} 个）"
+                state["status"] = "failed"
+                state["result_summary"] = f"加入监控失败：编号超出范围（当前最多 {len(candidates)} 个）"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.add_from_candidates"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_add_from_candidates_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11c_add_from_candidates_out_of_range"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            selected_candidate = candidates[selected_index - 1]
+            candidate_id = selected_candidate.get("candidate_id")
+            if candidate_id in (None, ""):
+                raise ValueError("候选项缺少 candidate_id")
+            batch_id = context.get("batch_id")
+            if batch_id in (None, ""):
+                raise ValueError("最近一次搜索结果缺少 batch_id")
+
+            b_client = BServiceClient()
+            result = b_client.add_from_candidates(
+                batch_id=int(batch_id),
+                candidate_ids=[int(candidate_id)],
+                source_type=str(context.get("source_type") or "discovery"),
+            )
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_add_from_candidates_result(
+                data=result,
+                selected_index=selected_index,
+                selected_candidate=selected_candidate,
+            )
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.add_from_candidates"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_add_from_candidates_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p11c_add_from_candidates_chain"
             state["client_profile"] = "b_service_client"
 
         elif intent_code == "warehouse.query_inventory":
@@ -648,6 +829,8 @@ def execute_action(state: dict) -> dict:
             state["status"] = "failed"
             if intent_code == "ecom_watch.add_monitor_by_url":
                 state["result_summary"] = f"加入监控失败：{str(e)}"
+            elif intent_code == "ecom_watch.add_from_candidates":
+                state["result_summary"] = f"加入监控失败：{str(e)}"
             elif intent_code == "ecom_watch.discovery_search":
                 state["result_summary"] = f"搜索失败：{str(e)}"
             else:
@@ -800,6 +983,33 @@ def format_b_add_monitor_by_url_result(data: dict, url: str) -> str:
     lines = ["已加入监控。", f"- URL：{url}"]
     if name:
         lines.append(f"- 名称：{name}")
+    if target_id is not None:
+        lines.append(f"- 对象ID：{target_id}")
+    if status:
+        lines.append(f"- 状态：{status}")
+    return "\n".join(lines)
+
+
+def format_b_add_from_candidates_result(data: dict, selected_index: int, selected_candidate: dict) -> str:
+    target = None
+    targets = data.get("targets")
+    if isinstance(targets, list) and targets:
+        target = targets[0] if isinstance(targets[0], dict) else None
+    source = target if isinstance(target, dict) else data
+    name = (
+        source.get("name")
+        or source.get("product_name")
+        or source.get("title")
+        or selected_candidate.get("title")
+    )
+    url = source.get("url") or source.get("product_url") or selected_candidate.get("url")
+    target_id = source.get("target_id") or source.get("id") or source.get("product_id")
+    status = source.get("status") or ("active" if source.get("is_active", True) else "inactive")
+    lines = ["已加入监控。", f"- 选择编号：第 {selected_index} 个"]
+    if name:
+        lines.append(f"- 名称：{name}")
+    if url:
+        lines.append(f"- URL：{url}")
     if target_id is not None:
         lines.append(f"- 对象ID：{target_id}")
     if status:

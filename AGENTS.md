@@ -662,7 +662,7 @@ P11：A 接 B 纳管主线
 
 当前阶段先做：
 
-P11-B：discovery 搜索 + candidate batch
+P11-C：add-from-candidates 编号选择最小闭环
 
 开始任何开发前，先阅读：
 

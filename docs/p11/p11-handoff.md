@@ -2,9 +2,9 @@
 
 ## 一、交接状态
 
-- 阶段：P11-B（discovery 搜索 + candidate batch）
+- 阶段：P11-C（add-from-candidates 编号选择最小闭环）
 - 状态：已收口，可演示
-- 主线：A 负责飞书入口与文本回写，B 负责 discovery 业务服务
+- 主线：A 负责飞书入口与文本回写，B 负责 discovery 与纳管业务服务
 
 ## 二、固定运行口径
 
@@ -16,42 +16,62 @@
 
 ## 三、固定验收样本（真实）
 
-### 1) 成功样本
-- 用户原文：`搜索商品：蓝牙耳机`
-- task_id：`TASK-20260423-8089C1`
+### 1) 无上下文失败样本
+- 飞书原文：`加入监控第 2 个`
+- task_id：`TASK-20260423-A74551`
+- 回复原文：`加入监控失败：未找到最近一次搜索结果，请先发送“搜索商品：关键词”`
+
+### 2) discovery 成功样本
+- 飞书原文：`搜索商品：蓝牙耳机`
+- task_id：`TASK-20260423-FFC984`
 - 回复原文：
-  - 搜索结果：蓝牙耳机
-  - 批次：4
-  - 候选（展示前 5 条）：
-    1. 藍牙耳機 - Fortress豐澤
-    2. 蓝牙耳机 | 香港蘇寧 SUNING
-    3. 2026年蓝牙耳机选购指南，高性价比蓝牙耳机推荐（4月更新） - 知乎
-    4. 小米耳機| 小米®香港官方商城 - Xiaomi
-    5. 蓝牙耳机_百度百科
+  - `搜索结果：蓝牙耳机`
+  - `批次：8`
+  - `候选（展示前 5 条）：`
+    1. `藍牙耳機 - Fortress豐澤`
+    2. `蓝牙耳机| 香港蘇寧SUNING`
+    3. `小米耳機| 小米®香港官方商城 - Xiaomi`
+    4. `AirPods - Apple (香港)`
+    5. `2026年真無線藍牙耳機推薦！依用途精選13款高評價藍牙耳機`
 
-### 2) 失败样本
-- 用户原文：`搜索商品：`
-- task_id：`TASK-20260423-8765A3`
-- 回复原文：`搜索失败：请输入搜索关键词`
-
-### 3) 回归验证样本
-- 用户原文：`今天有什么变化`
-- 结果：查询链路正常
+### 3) 编号纳管成功样本
+- 飞书原文：`加入监控第 2 个`
+- task_id：`TASK-20260423-544156`
+- 回复原文：
+  - `已加入监控。`
+  - `选择编号：第 2 个`
+  - `名称：蓝牙耳机 | 香港蘇寧 SUNING`
+  - `URL：https://search.hksuning.com/search/result?keyword=%E8%93%9D%E7%89%99%E8%80%B3%E6%9C%BA`
+  - `对象ID：5`
+  - `状态：active`
 
 ### 4) 联动验证样本
-- 用户原文：`看看当前监控对象`
-- 结果：P10 / P11-A 链路保持正常
+- 飞书原文：`看看当前监控对象`
+- task_id：`TASK-20260423-6FAF67`
+- 回复原文：
+  - `当前监控对象（共 5 个）：`
+  - `#1 Mock Phone X（inactive）`
+  - `#2 Mock Headphone Pro（active）`
+  - `#3 Mock Keyboard Mini（active）`
+  - `#4 abc（active）`
+  - `#5 蓝牙耳机 | 香港蘇寧 SUNING（active）`
 
-## 四、后移项（不要提前开工）
+## 四、边界与后移项
 
-- discovery 搜索后移到 P11-B
-- candidate batch / add-from-candidates 后移
-- pause / resume / delete 后移
-- 卡片正式交互后移
-- PostgreSQL 不属于本轮范围
+当前已确认：
+- 发现 → 编号选择 → 正式纳管闭环已成立
+- 无上下文失败路径已成立
+- 当前未扩卡片交互
+- 当前未做 pause / resume / delete
+- 当前未切 PostgreSQL
+
+后移项：
+- P11-D：monitor 管理动作（pause/resume/delete）
+- 卡片正式交互继续后移
+- PostgreSQL 不属于当前范围
 
 ## 五、下一阶段候选方向（仅方向）
 
-1. P11-B：discovery 搜索 + candidate batch  
-2. P11-C：add-from-candidates 编号选择最小闭环  
-3. P11-D：monitor 管理动作（pause/resume/delete）  
+1. P11-D：monitor 管理动作（pause/resume/delete）
+2. 飞书卡片正式交互
+3. PostgreSQL 切换与回归验证
