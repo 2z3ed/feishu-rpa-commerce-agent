@@ -1,176 +1,209 @@
-# P12-C 开发主线文档
+# P12-D 开发主线文档
 
 ## 阶段名称
 
-P12-C：监控对象管理卡片版
+P12-D：监控对象分页 / 查看更多版
 
 ## 一、阶段背景
 
-P12-A 已完成候选结果卡片展示。  
-P12-B 已完成候选卡片“加入监控”按钮回调。
+P12-C 已完成监控对象管理卡片：
 
-当前老板交互中，还有一条仍然是纯文本：
+- “看看当前监控对象”优先返回飞书卡片
+- 卡片展示对象名称、ID、状态、URL
+- active / inactive 支持暂停 / 恢复按钮
+- 卡片失败 fallback 文本
 
-看看当前监控对象
-它现在能返回监控对象列表，但展示形态还是文本，不利于老板快速判断哪些对象 active、inactive，也不方便后续做管理动作。
+但 P12-C 明确只展示前 5 条。
 
-所以 P12-C 的目标不是新增业务能力，而是把已有 monitor list 结果升级为飞书管理卡片。
+当监控对象超过 5 个时，老板目前无法在卡片中继续查看第 6 条以后的对象。
 
-二、本轮唯一目标
+所以 P12-D 只解决一个问题：
+
+超过 5 个监控对象后，如何继续查看。
+
+## 二、本轮唯一目标
 
 只做：
 
-把“看看当前监控对象”的成功回复升级为监控对象管理卡片。
+监控对象管理卡片的“查看更多 / 下一页”。
 
-卡片最小展示：
+目标链路：
 
-当前监控对象总数
-对象名称
-对象ID
-状态 active / inactive
-URL
-最小操作按钮：暂停 / 恢复
-三、当前固定边界
+1. 用户发送：看看当前监控对象
+2. 系统返回第 1 页管理卡片
+3. 如果总数超过 5 条，卡片底部出现“查看更多”
+4. 用户点击“查看更多”
+5. 系统返回第 2 页管理卡片
+6. 第 2 页继续展示对象名称、ID、状态、URL
+7. 暂停 / 恢复按钮仍可用
+
+## 三、当前固定边界
 
 A 项目仍是：
 
-飞书入口层
-消息编排层
-老板交互层
+- 飞书入口层
+- 消息编排层
+- 老板交互层
 
 B 项目仍是：
 
-业务服务层
-monitor target 数据与动作提供方
+- 业务服务层
+- monitor target 数据提供方
 
 固定原则：
 
-不合并 A / B
-A 调 B 继续按 Envelope 解包
-B 默认地址继续为 http://127.0.0.1:8005
-不把 B 的业务逻辑搬进 A
-不重写 P12-A / P12-B
-四、本轮允许做
+- 不合并 A / B
+- A 调 B 继续按 Envelope 解包
+- B 默认地址继续为 http://127.0.0.1:8005
+- 不把 B 业务逻辑搬进 A
+- 不重写 P12-A / P12-B / P12-C
+
+## 四、本轮允许做
 
 允许：
 
-新增 monitor target 管理卡片 builder
-“看看当前监控对象”成功时优先返回卡片
-卡片失败时 fallback 文本
-卡片展示前 5 条监控对象
-active 对象展示“暂停监控”按钮
-inactive 对象展示“恢复监控”按钮
-点击暂停 / 恢复后复用现有 monitor 管理能力
-成功后补发老板可读文本
-失败后补发老板可读错误
-五、本轮禁止做
+1. 管理卡片支持 page / offset / limit
+2. 默认展示第 1 页，每页 5 条
+3. 超过 5 条时显示“查看更多”按钮
+4. 点击查看更多后返回下一页卡片
+5. 下一页继续保留暂停 / 恢复按钮
+6. 没有更多数据时给出老板可读提示
+7. 卡片失败时 fallback 文本
+8. 补最小测试
+
+## 五、本轮禁止做
 
 禁止：
 
-不做删除按钮
-不做批量暂停 / 批量恢复
-不做分页
-不做搜索过滤
-不做复杂卡片状态同步
-不做卡片局部刷新
-不做 PostgreSQL 切换
-不新增业务动作
-不重写 P12-A / P12-B
-不破坏候选卡片“加入监控”按钮
-不破坏文本命令
-六、最小按钮 payload
+- 不做删除按钮
+- 不做批量暂停 / 批量恢复
+- 不做搜索过滤
+- 不做排序规则
+- 不做复杂分页状态系统
+- 不做 PostgreSQL 切换
+- 不新增业务动作
+- 不重写 monitor list 主链
+- 不破坏 P12-B 候选按钮
+- 不破坏 P12-C 暂停 / 恢复按钮
 
-暂停按钮：
+## 六、最小 payload 设计
 
+查看更多按钮：
+
+```json
 {
-  "action": "pause_monitor_target",
-  "target_id": 7,
+  "action": "monitor_targets_next_page",
+  "page": 2,
+  "limit": 5,
   "source": "monitor_list_card"
 }
-
-恢复按钮：
-
-{
-  "action": "resume_monitor_target",
-  "target_id": 7,
-  "source": "monitor_list_card"
-}
+```
 
 字段说明：
 
-action：固定动作名
-target_id：监控对象ID
-source：用于排查来源
-七、建议实现顺序
-P12-C.0：锚定现有监控对象查询链
+- action：固定为 monitor_targets_next_page
+- page：下一页页码，从 1 开始
+- limit：每页条数，默认 5
+- source：来源标识
+
+## 七、建议实现顺序
+
+### P12-D.0：锚定 P12-C 管理卡片
 
 先确认：
 
-“看看当前监控对象”当前 intent_code 是什么
-当前 execute_action 如何调用 B
-当前 result_summary 文本如何生成
-当前是否已有 pause / resume 文本命令能力
-如果没有 pause / resume 能力，本轮先只做展示卡片，不做按钮落地
-P12-C.1：管理卡片 builder
+- monitor_targets.py 当前 builder 的输入结构
+- longconn.py 当前 pause / resume 回调逻辑
+- ingress_tasks.py 当前 monitor.targets 成功卡片发送逻辑
+- BServiceClient.get_monitor_targets() 当前返回是否包含完整列表
 
-新增独立 builder，建议位置：
+### P12-D.1：卡片 builder 支持分页参数
 
-app/services/feishu/cards/monitor_targets.py
+让 monitor_targets card builder 支持：
 
-不要把卡片 JSON 散写在 execute_action 或 ingress_tasks 中。
+- page
+- limit
+- total
+- has_next
+- start_index
+- end_index
 
-P12-C.2：成功路径替换
+默认：
 
-当“看看当前监控对象”成功时：
+```text
+page = 1
+limit = 5
+```
 
-优先构建管理卡片
-优先发送 interactive 卡片
-发送失败 fallback 原文本列表
-P12-C.3：暂停 / 恢复按钮回调
+### P12-D.2：第一页展示“查看更多”
 
-如果现有 B 服务已有 pause / resume 能力，则接入。
+当 total > page * limit 时，卡片底部出现：
 
-如果没有，则不要硬造业务能力，先回报：
+```text
+查看更多
+```
 
-当前 B 未提供 pause/resume 能力，P12-C 本轮只能完成管理卡片展示，按钮动作后移。
-P12-C.4：最小验收
+点击后触发：
 
-必须验证：
+```json
+{
+  "action": "monitor_targets_next_page",
+  "page": 2,
+  "limit": 5,
+  "source": "monitor_list_card"
+}
+```
 
-看看当前监控对象 → 返回管理卡片
-卡片展示对象名称、状态、URL、ID
-卡片失败时 fallback 文本
-P12-A 搜索卡片不退化
-P12-B 加入监控按钮不退化
-文本加入监控仍可用
-八、通过标准
+### P12-D.3：回调返回下一页
 
-P12-C 通过条件：
+点击“查看更多”后：
 
-“看看当前监控对象”优先返回管理卡片
-卡片展示信息完整
-失败 fallback 文本
-不破坏 P12-A
-不破坏 P12-B
-不混入删除 / 分页 / PostgreSQL
-如果 pause / resume 已接入，必须实机验证成功
-如果 pause / resume 未接入，必须明确记录后移原因
-九、提交边界
+- A 重新调用 B 获取 monitor targets
+- 按 page / limit 切片
+- 返回下一页管理卡片
+- 保留每个对象暂停 / 恢复按钮
+
+优先补发新卡片或文本均可，但建议补发新卡片。
+
+### P12-D.4：边界处理
+
+必须处理：
+
+- page 非法
+- limit 非法
+- 没有更多数据
+- B 服务失败
+- 卡片发送失败 fallback 文本
+
+## 八、通过标准
+
+P12-D 通过条件：
+
+- 监控对象超过 5 个时出现“查看更多”
+- 点击后能看到第 6 条以后的对象
+- 下一页仍保留暂停 / 恢复按钮
+- 没有更多数据时提示清楚
+- P12-A 搜索卡片不退化
+- P12-B 加入监控按钮不退化
+- P12-C 管理卡片不退化
+- 不混入删除、批量、搜索过滤、PostgreSQL
+
+## 九、提交边界
 
 允许提交：
 
-AGENTS.md
-README.md 增量
-docs/p12 四份约束文件
-monitor card builder
-P12-C 最小回调代码
-P12-C 最小测试
+- AGENTS.md
+- README.md 增量
+- docs/p12 四份约束文件
+- monitor card builder 分页增强
+- card action next page 回调
+- P12-D 最小测试
 
 禁止提交：
 
-无关重构
-P12-D 内容
-删除按钮
-分页
-PostgreSQL
-临时日志
+- P12-E 内容
+- 删除按钮
+- 批量操作
+- 搜索过滤
+- 无关重构
+- 临时日志

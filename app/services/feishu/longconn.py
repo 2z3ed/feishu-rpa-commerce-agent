@@ -22,6 +22,7 @@ from app.db.session import SessionLocal
 from app.db.models import TaskRecord
 from app.graph.nodes.execute_action import execute_action, _load_latest_discovery_context
 from app.clients.b_service_client import BServiceClient
+from app.services.feishu.cards.monitor_targets import build_monitor_targets_card
 
 
 class FeishuLongConnListener:
@@ -429,6 +430,28 @@ class FeishuLongConnListener:
         return action_name, target_id
 
     @staticmethod
+    def _parse_monitor_targets_next_page_payload(value: dict) -> tuple[int, int]:
+        action_name = str(value.get("action") or "").strip()
+        if action_name != "monitor_targets_next_page":
+            raise ValueError("不支持的分页动作")
+        try:
+            page = int(value.get("page"))
+        except Exception as exc:
+            raise ValueError("payload 缺少有效 page") from exc
+        if page <= 0:
+            raise ValueError("page 必须是大于 0 的整数")
+        raw_limit = value.get("limit", 5)
+        try:
+            limit = int(raw_limit)
+        except Exception:
+            limit = 5
+        if limit <= 0:
+            limit = 5
+        if limit > 20:
+            limit = 20
+        return page, limit
+
+    @staticmethod
     def _resolve_card_reply_target(chat_id: str, open_id: str) -> tuple[str, str]:
         normalized_chat_id = str(chat_id or "").strip()
         normalized_open_id = str(open_id or "").strip()
@@ -468,7 +491,7 @@ class FeishuLongConnListener:
                 chat_id,
                 open_id,
             )
-            if action_name not in {"add_from_candidate", "pause_monitor_target", "resume_monitor_target"}:
+            if action_name not in {"add_from_candidate", "pause_monitor_target", "resume_monitor_target", "monitor_targets_next_page"}:
                 logger.info("Ignore unsupported card action: %s", action_name)
                 return
 
@@ -512,7 +535,7 @@ class FeishuLongConnListener:
                     query,
                     result.get("status"),
                 )
-            else:
+            elif action_name in {"pause_monitor_target", "resume_monitor_target"}:
                 action_name, target_id = self._parse_manage_monitor_payload(value)
                 b_client = BServiceClient()
                 if action_name == "pause_monitor_target":
@@ -527,6 +550,63 @@ class FeishuLongConnListener:
                     target_id,
                     open_message_id,
                 )
+            else:
+                page, limit = self._parse_monitor_targets_next_page_payload(value)
+                b_client = BServiceClient()
+                targets_data = b_client.get_monitor_targets()
+                targets = targets_data.get("targets")
+                if not isinstance(targets, list):
+                    targets = targets_data.get("items") if isinstance(targets_data.get("items"), list) else []
+                total = len(targets)
+                start = (page - 1) * limit
+                if start >= total:
+                    result_text = f"没有更多监控对象了。\n- 总数：{total}\n- 当前页：{page}"
+                    logger.info(
+                        "=== P12-D MONITOR NEXT PAGE EMPTY === page=%s limit=%s total=%s open_message_id=%s",
+                        page,
+                        limit,
+                        total,
+                        open_message_id,
+                    )
+                else:
+                    card = build_monitor_targets_card(
+                        targets=targets,
+                        page=page,
+                        limit=limit,
+                    )
+                    send_ok = False
+                    if chat_id:
+                        send_ok = feishu_client.send_interactive_message(
+                            receive_id=chat_id,
+                            card=card,
+                            receive_id_type="chat_id",
+                        )
+                    elif open_id:
+                        send_ok = feishu_client.send_interactive_message(
+                            receive_id=open_id,
+                            card=card,
+                            receive_id_type="open_id",
+                        )
+                    if send_ok:
+                        logger.info(
+                            "=== P12-D MONITOR NEXT PAGE CARD SENT === page=%s limit=%s total=%s open_message_id=%s",
+                            page,
+                            limit,
+                            total,
+                            open_message_id,
+                        )
+                        return
+                    result_text = (
+                        f"监控对象第 {page} 页（每页 {limit} 条）\n"
+                        f"卡片发送失败，请稍后重试。"
+                    )
+                    logger.warning(
+                        "=== P12-D MONITOR NEXT PAGE CARD FAILED === page=%s limit=%s total=%s open_message_id=%s",
+                        page,
+                        limit,
+                        total,
+                        open_message_id,
+                    )
 
             reply_target_type, reply_target_id = self._resolve_card_reply_target(chat_id=chat_id, open_id=open_id)
             logger.info(
@@ -541,6 +621,8 @@ class FeishuLongConnListener:
         except Exception as e:
             if action_name in {"pause_monitor_target", "resume_monitor_target"}:
                 error_text = f"未能完成监控操作。\n原因：{str(e)}"
+            elif action_name == "monitor_targets_next_page":
+                error_text = f"未能加载更多监控对象。\n原因：{str(e)}"
             else:
                 error_text = f"未能加入监控。\n原因：{str(e)}\n可继续使用“加入监控第 N 个”重试。"
             try:
