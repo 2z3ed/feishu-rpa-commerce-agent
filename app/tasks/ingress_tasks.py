@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.db.models import TaskRecord
 from app.graph.builder import graph as lang_graph
 from app.services.feishu.client import FeishuClient
+from app.services.feishu.cards.discovery_candidates import build_discovery_candidates_card
 from app.services.feishu.bitable_write import try_write_bitable_ledger
 from app.utils.task_logger import log_step
 from app.core.time import get_shanghai_now
@@ -255,15 +256,54 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
             try:
                 client = FeishuClient()
                 result_text = result.get("result_summary", "任务执行完成")
-                logger.info("=== SENDING FEISHU RESULT MESSAGE === message_id=%s, result_text=%s", 
-                           source_message_id, result_text[:100])
-                success = client.send_text_reply(source_message_id, result_text)
-                if success:
+
+                sent = False
+                try:
+                    # P12-A: only upgrade discovery success reply shape to an interactive card.
+                    if str(result.get("capability") or "") == "discovery.search" and str(result.get("status") or "") == "succeeded":
+                        row = (
+                            db.query(TaskStep.detail)
+                            .filter(TaskStep.task_id == task_id, TaskStep.step_code == "discovery_context_saved")
+                            .order_by(TaskStep.created_at.desc())
+                            .first()
+                        )
+                        if row and row[0]:
+                            import json as _json
+
+                            ctx = _json.loads(row[0])
+                            candidates = ctx.get("candidates") if isinstance(ctx.get("candidates"), list) else []
+                            query = str(ctx.get("query") or "")
+                            batch_id = ctx.get("batch_id") or ""
+                            card = build_discovery_candidates_card(
+                                query=query,
+                                batch_id=batch_id,
+                                candidates=candidates,
+                                max_items=5,
+                            )
+                            sent = client.send_interactive_reply(source_message_id, card)
+                except Exception as card_exc:
+                    logger.warning("P12 discovery card send skipped/fallback: task_id=%s err=%s", task_id, card_exc)
+                    sent = False
+
+                if not sent:
+                    logger.info(
+                        "=== SENDING FEISHU RESULT TEXT === message_id=%s, result_text=%s",
+                        source_message_id,
+                        result_text[:100],
+                    )
+                    sent = client.send_text_reply(source_message_id, result_text)
+
+                if sent:
                     logger.info("=== FEISHU RESULT MESSAGE SENT === task_id=%s, message_id=%s", task_id, source_message_id)
                     log_step(task_id, "result_replied", "success", f"message_id={source_message_id}")
                 else:
-                    logger.error("=== FEISHU RESULT MESSAGE FAILED === task_id=%s, message_id=%s, code=%s, msg=%s", 
-                                task_id, source_message_id, "unknown", "send_text_reply returned False")
+                    logger.error(
+                        "=== FEISHU RESULT MESSAGE FAILED === task_id=%s, message_id=%s, code=%s, msg=%s",
+                        task_id,
+                        source_message_id,
+                        "unknown",
+                        "send_reply returned False",
+                    )
                     log_step(task_id, "result_replied", "failed", f"message_id={source_message_id}, code=unknown")
             except Exception as e:
                 logger.error("=== FEISHU RESULT MESSAGE FAILED === task_id=%s, message_id=%s, error=%s, traceback=%s", 

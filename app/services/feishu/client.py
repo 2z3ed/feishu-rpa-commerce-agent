@@ -89,5 +89,37 @@ class FeishuClient:
             logger.error("=== FEISHU REPLY FAILED ===: %s", str(e))
             return False
 
+    def send_interactive_reply(self, message_id: str, card: dict) -> bool:
+        try:
+            logger.info("=== FEISHU INTERACTIVE REPLY START ===")
+            if lark is None:
+                raise RuntimeError("lark_oapi is not installed")
+            from lark_oapi.api.im.v1.model import ReplyMessageRequest, ReplyMessageRequestBody
+
+            request = (
+                ReplyMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    ReplyMessageRequestBody.builder()
+                    .msg_type("interactive")
+                    .content(lark.JSON.marshal(card))
+                    .build()
+                )
+                .build()
+            )
+            response = self.client.im.v1.message.reply(request)
+            if response.code == 0:
+                logger.info("=== FEISHU INTERACTIVE REPLY SUCCESS ===: message_id=%s", message_id)
+                return True
+            logger.error(
+                "=== FEISHU INTERACTIVE REPLY FAILED ===: code=%s, msg=%s",
+                response.code,
+                response.msg,
+            )
+            return False
+        except Exception as e:
+            logger.error("=== FEISHU INTERACTIVE REPLY FAILED ===: %s", str(e))
+            return False
+
 
 feishu_client = FeishuClient()

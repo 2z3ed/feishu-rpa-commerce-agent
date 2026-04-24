@@ -107,7 +107,7 @@ def test_execute_monitor_targets_success(monkeypatch):
     state = {"intent_code": "ecom_watch.monitor_targets", "slots": {}, "status": "processing"}
     result = execute_action(state)
     assert result["status"] == "succeeded"
-    assert "#123" in result["result_summary"]
+    assert "ID=123" in result["result_summary"]
 
 
 def test_execute_product_detail_success(monkeypatch):
