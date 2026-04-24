@@ -110,3 +110,34 @@ def test_card_action_monitor_targets_next_page_sends_next_card(monkeypatch):
     )
     assert "商品6" in text_blob
     assert "商品1" not in text_blob
+
+
+def test_card_action_monitor_targets_next_page_without_more_data_returns_readable_text(monkeypatch):
+    listener = FeishuLongConnListener()
+    sent_messages: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        "app.services.feishu.longconn.BServiceClient.get_monitor_targets",
+        lambda _self: {"targets": _build_targets(8)},
+    )
+    monkeypatch.setattr(
+        "app.services.feishu.longconn.feishu_client.send_interactive_message",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "app.services.feishu.longconn.feishu_client.send_text_message",
+        lambda receive_id, text, receive_id_type="open_id": sent_messages.append((receive_id, text, receive_id_type)) or True,
+    )
+
+    payload = {
+        "event": {
+            "chat_id": "chat-1",
+            "operator": {"open_id": "ou_123"},
+            "action": {"value": {"action": "monitor_targets_next_page", "page": 3, "limit": 5, "source": "monitor_list_card"}},
+        }
+    }
+    listener._handle_card_action_event(_FakeEvent(payload))
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0][2] == "chat_id"
+    assert "没有更多监控对象了" in sent_messages[0][1]
