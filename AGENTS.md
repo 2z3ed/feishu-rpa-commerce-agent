@@ -662,7 +662,7 @@ P11：A 接 B 纳管主线
 
 当前阶段先做：
 
-P11-C：add-from-candidates 编号选择最小闭环
+P11-D：monitor 管理动作（pause / resume / delete）最小闭环
 
 开始任何开发前，先阅读：
 

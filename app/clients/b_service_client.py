@@ -59,11 +59,23 @@ class BServiceClient:
             payload["source_type"] = source_type
         return self._post_envelope_data("/internal/monitor/add-from-candidates", payload)
 
+    def pause_monitor_target(self, target_id: int | str) -> dict[str, Any]:
+        return self._post_envelope_data(f"/internal/monitor/{int(target_id)}/pause", {})
+
+    def resume_monitor_target(self, target_id: int | str) -> dict[str, Any]:
+        return self._post_envelope_data(f"/internal/monitor/{int(target_id)}/resume", {})
+
+    def delete_monitor_target(self, target_id: int | str) -> dict[str, Any]:
+        return self._delete_envelope_data(f"/internal/monitor/{int(target_id)}")
+
     def _get_envelope_data(self, path: str) -> dict[str, Any]:
         return self._request_envelope_data(method="GET", path=path)
 
     def _post_envelope_data(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request_envelope_data(method="POST", path=path, json_payload=payload)
+
+    def _delete_envelope_data(self, path: str) -> dict[str, Any]:
+        return self._request_envelope_data(method="DELETE", path=path)
 
     def _request_envelope_data(
         self,

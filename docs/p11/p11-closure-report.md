@@ -1,83 +1,99 @@
-# P11 收口报告
+# P11 收口报告（P11-D）
 
 ## 一、阶段结论
 
-P11-C（add-from-candidates 编号选择最小闭环）已通过并收口。
+P11-D（monitor 管理动作：pause / resume / delete 最小闭环）已通过并收口。
 
-本轮结论：
-- A 已能基于最近一次 discovery 结果做编号选择
-- A 已稳定调用 B：`POST /internal/monitor/add-from-candidates`
-- A 已按 Envelope（`ok/data/error`）显式解包
-- 飞书成功/失败文本路径均已成立
-- 发现 → 编号选择 → 正式纳管闭环已成立
-- 无上下文失败路径已成立
-- P10 / P11-A / P11-B 已收口链路保持正常
+本轮结论（冻结）：
+- A 已能调用 B 的 monitor 管理接口：
+  - `POST /internal/monitor/{id}/pause`
+  - `POST /internal/monitor/{id}/resume`
+  - `DELETE /internal/monitor/{id}`
+- A 已能基于“最近一次 monitor/targets 列表”进行编号选择（仅面向当前 chat/user 的最近一次成功列表）
+- A→B 调用继续按 Envelope（`ok/data/error`）显式解包
+- “查看列表 → 编号管理 → 再看列表”的联动已成立（状态变化可见）
+- 飞书前台仅使用文本回复（未引入卡片交互）
+- 未切 PostgreSQL，未引入共享数据库
+- 未回头改 P10 / P11-A / P11-B / P11-C 已收口链路
 
 ## 二、固定真实样本（冻结）
 
-### 1) 无上下文失败样本
-- 飞书原文：`加入监控第 2 个`
-- task_id：`TASK-20260423-A74551`
-- 回复原文：
-  - `加入监控失败：未找到最近一次搜索结果，请先发送“搜索商品：关键词”`
-
-### 2) discovery 成功样本
-- 飞书原文：`搜索商品：蓝牙耳机`
-- task_id：`TASK-20260423-FFC984`
-- 回复原文：
-  - `搜索结果：蓝牙耳机`
-  - `批次：8`
-  - `候选（展示前 5 条）：`
-    1. `藍牙耳機 - Fortress豐澤`
-    2. `蓝牙耳机| 香港蘇寧SUNING`
-    3. `小米耳機| 小米®香港官方商城 - Xiaomi`
-    4. `AirPods - Apple (香港)`
-    5. `2026年真無線藍牙耳機推薦！依用途精選13款高評價藍牙耳機`
-
-### 3) 编号纳管成功样本
-- 飞书原文：`加入监控第 2 个`
-- task_id：`TASK-20260423-544156`
-- 回复原文：
-  - `已加入监控。`
-  - `选择编号：第 2 个`
-  - `名称：蓝牙耳机 | 香港蘇寧 SUNING`
-  - `URL：https://search.hksuning.com/search/result?keyword=%E8%93%9D%E7%89%99%E8%80%B3%E6%9C%BA`
-  - `对象ID：5`
-  - `状态：active`
-
-### 4) 联动验证样本
+### 1) 列表样本
 - 飞书原文：`看看当前监控对象`
-- task_id：`TASK-20260423-6FAF67`
+- task_id：`TASK-20260424-35D9F2`
 - 回复原文：
-  - `当前监控对象（共 5 个）：`
-  - `#1 Mock Phone X（inactive）`
-  - `#2 Mock Headphone Pro（active）`
-  - `#3 Mock Keyboard Mini（active）`
-  - `#4 abc（active）`
-  - `#5 蓝牙耳机 | 香港蘇寧 SUNING（active）`
+
+  当前监控对象（共 5 个）：
+
+  * 1. Mock Phone X（inactive，ID=1）
+  * 2. Mock Headphone Pro（active，ID=2）
+  * 3. Mock Keyboard Mini（inactive，ID=3）
+  * 4. abc（active，ID=4）
+  * 5. 蓝牙耳机 | 香港蘇寧 SUNING（active，ID=5）
+
+### 2) 暂停成功样本
+- 飞书原文：`暂停监控第 2 个`
+- task_id：`TASK-20260424-240919`
+- 回复原文：
+
+  已暂停监控。
+
+  * 选择编号：第 2 个
+  * 名称：Mock Headphone Pro
+  * 对象ID：2
+
+### 3) 暂停后联动验证
+- 飞书原文：`看看当前监控对象`
+- task_id：`TASK-20260424-E20D19`
+- 验证点：回复原文中第 2 个对象状态变为 `inactive`
+
+### 4) 恢复成功样本
+- 飞书原文：`恢复监控第 2 个`
+- task_id：`TASK-20260424-219943`
+- 回复原文：
+
+  已恢复监控。
+
+  * 选择编号：第 2 个
+  * 名称：Mock Headphone Pro
+  * 对象ID：2
+
+### 5) 恢复后联动验证
+- 飞书原文：`看看当前监控对象`
+- task_id：`TASK-20260424-84BF42`
+- 验证点：回复原文中第 2 个对象状态恢复 `active`
+
+### 6) 失败样本（超范围编号）
+- 飞书原文：`删除监控第 99 个`
+- task_id：`TASK-20260424-5C0A5E`
+- 回复原文：
+
+  操作失败：编号超出范围（当前最多 5 个）
 
 ## 三、收口范围确认
 
-本轮已做：
-- add-from-candidates 主链（成功 / 失败）
-- 最近一次 discovery 上下文复用
-- 飞书文本回复成型
+本轮已做（冻结）：
+- monitor 管理动作：pause / resume / delete
+- 最近一次 targets 上下文复用（编号 → 对象 ID）
+- 飞书文本回复成功/失败路径
 - A→B Envelope 解包
-- 联动与回归验证
+- 列表状态联动验证
 
-本轮未做（后移）：
-- 卡片正式交互
-- pause / resume / delete
-- PostgreSQL 切换
+本轮明确未做（后移）：
+- 飞书卡片正式交互
+- 分页 / 多轮复杂状态机
+- PostgreSQL 切换与回归
+- 扩展更口语化的编号命令（如“第二个”）
 
 ## 四、后移项（冻结）
 
-- P11-D：monitor 管理动作（pause/resume/delete）
-- 卡片正式交互继续后移
-- PostgreSQL 不属于当前范围
+- 飞书卡片正式交互继续后移
+- 更口语化编号命令（如“第二个/2号”）可作为后续小优化
+- PostgreSQL 不属于当前范围（本阶段不切库）
 
 ## 五、下一阶段候选方向（仅方向，不开工）
 
-1. P11-D：monitor 管理动作（pause/resume/delete）
-2. 飞书卡片正式交互
-3. PostgreSQL 切换与回归验证
+按优先级（仅列方向）：
+1. 飞书卡片正式交互（把“列表 + 管理动作”升级成卡片按钮，但不改变 A/B 分工与 Envelope）
+2. 命令口径小优化（更口语化编号、别名、容错）
+3. PostgreSQL 切换与回归验证（不作为本阶段前置）

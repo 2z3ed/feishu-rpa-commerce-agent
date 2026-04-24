@@ -32,6 +32,7 @@ from app.utils.task_logger import log_step
 from app.clients.b_service_client import BServiceClient, BServiceError
 
 _DISCOVERY_CONTEXT_STEP_CODE = "discovery_context_saved"
+_MONITOR_TARGETS_CONTEXT_STEP_CODE = "monitor_targets_context_saved"
 
 
 def _extract_confirm_failure_layer(result: dict) -> str:
@@ -129,6 +130,80 @@ def _load_latest_discovery_context(*, chat_id: str, user_open_id: str) -> dict |
             .join(TaskRecord, TaskRecord.task_id == TaskStep.task_id)
             .filter(
                 TaskStep.step_code == _DISCOVERY_CONTEXT_STEP_CODE,
+                TaskRecord.chat_id == chat_id,
+                TaskRecord.status == "succeeded",
+            )
+            .order_by(TaskStep.created_at.desc())
+        )
+        if user_open_id:
+            query = query.filter(TaskRecord.user_open_id == user_open_id)
+        row = query.first()
+        if not row:
+            return None
+        raw_detail = row[0] if isinstance(row, tuple) else getattr(row, "detail", "")
+        payload = json.loads(raw_detail or "{}")
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def _extract_monitor_target_minimal(item: dict) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("id")
+    if raw_id in (None, ""):
+        raw_id = item.get("product_id") or item.get("target_id")
+    if raw_id in (None, ""):
+        return None
+    name = str(item.get("name") or item.get("product_name") or item.get("title") or "未命名")
+    status = str(item.get("status") or ("active" if item.get("is_active", True) else "inactive"))
+    url = str(item.get("url") or item.get("product_url") or "")
+    return {"target_id": int(raw_id), "name": name, "status": status, "url": url}
+
+
+def _build_monitor_targets_context(*, targets_data: dict) -> dict:
+    raw_targets = targets_data.get("targets")
+    if not isinstance(raw_targets, list):
+        raw_targets = targets_data.get("items") if isinstance(targets_data.get("items"), list) else []
+    targets: list[dict] = []
+    for item in raw_targets:
+        if not isinstance(item, dict):
+            continue
+        minimal = _extract_monitor_target_minimal(item)
+        if minimal is None:
+            continue
+        targets.append(minimal)
+    return {"targets": targets}
+
+
+def _save_monitor_targets_context(*, task_id: str, state: dict, context: dict) -> None:
+    payload = {
+        "chat_id": str(state.get("source_chat_id") or ""),
+        "user_open_id": str(state.get("user_open_id") or ""),
+        "targets": context.get("targets") if isinstance(context.get("targets"), list) else [],
+    }
+    log_step(
+        task_id,
+        _MONITOR_TARGETS_CONTEXT_STEP_CODE,
+        "success",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def _load_latest_monitor_targets_context(*, chat_id: str, user_open_id: str) -> dict | None:
+    if not chat_id:
+        return None
+    db = SessionLocal()
+    try:
+        query = (
+            db.query(TaskStep.detail)
+            .join(TaskRecord, TaskRecord.task_id == TaskStep.task_id)
+            .filter(
+                TaskStep.step_code == _MONITOR_TARGETS_CONTEXT_STEP_CODE,
                 TaskRecord.chat_id == chat_id,
                 TaskRecord.status == "succeeded",
             )
@@ -369,6 +444,8 @@ def execute_action(state: dict) -> dict:
         elif intent_code == "ecom_watch.monitor_targets":
             b_client = BServiceClient()
             result = b_client.get_monitor_targets()
+            context = _build_monitor_targets_context(targets_data=result)
+            _save_monitor_targets_context(task_id=task_id, state=state, context=context)
             state["status"] = "succeeded"
             state["result_summary"] = format_b_monitor_targets_result(result)
             state["platform"] = "ecom_watch"
@@ -382,6 +459,126 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p10_query_chain"
             state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.manage_monitor_target":
+            raw_index = slots.get("index")
+            try:
+                selected_index = int(raw_index)
+            except Exception:
+                selected_index = 0
+            action = str(slots.get("action") or "").strip().lower()
+            if selected_index <= 0:
+                state["error_message"] = "编号必须是大于 0 的整数"
+                state["status"] = "failed"
+                state["result_summary"] = "操作失败：编号必须是大于 0 的整数"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.manage"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_manage_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11d_manage_invalid_index"
+                state["client_profile"] = "b_service_client"
+                return state
+            if action not in ("pause", "resume", "delete"):
+                state["error_message"] = "不支持的管理动作"
+                state["status"] = "failed"
+                state["result_summary"] = "操作失败：不支持的管理动作（仅支持 暂停/恢复/删除）"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.manage"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_manage_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11d_manage_invalid_action"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            context = _load_latest_monitor_targets_context(
+                chat_id=str(state.get("source_chat_id") or ""),
+                user_open_id=str(state.get("user_open_id") or ""),
+            )
+            if not context:
+                state["error_message"] = "未找到最近一次监控列表"
+                state["status"] = "failed"
+                state["result_summary"] = "操作失败：未找到最近一次监控列表，请先发送“看看当前监控对象”"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.manage"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_manage_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11d_manage_missing_targets_context"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            targets = context.get("targets") if isinstance(context.get("targets"), list) else []
+            if selected_index > len(targets):
+                state["error_message"] = f"编号超出范围（当前最多 {len(targets)} 个）"
+                state["status"] = "failed"
+                state["result_summary"] = f"操作失败：编号超出范围（当前最多 {len(targets)} 个）"
+                state["platform"] = "ecom_watch"
+                state["provider_id"] = "ecom_watch"
+                state["capability"] = "monitor.manage"
+                state["readiness_status"] = "ready"
+                state["endpoint_profile"] = "b_internal_monitor_manage_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "httpx_b_service"
+                state["selected_backend"] = "httpx_b_service"
+                state["final_backend"] = "httpx_b_service"
+                state["backend_selection_reason"] = "p11d_manage_out_of_range"
+                state["client_profile"] = "b_service_client"
+                return state
+
+            selected = targets[selected_index - 1] if isinstance(targets[selected_index - 1], dict) else {}
+            target_id = selected.get("target_id")
+            if target_id in (None, ""):
+                raise ValueError("监控对象缺少 target_id")
+
+            b_client = BServiceClient()
+            if action == "pause":
+                result = b_client.pause_monitor_target(int(target_id))
+                verb = "已暂停监控"
+                state["endpoint_profile"] = "b_internal_monitor_pause_v1"
+            elif action == "resume":
+                result = b_client.resume_monitor_target(int(target_id))
+                verb = "已恢复监控"
+                state["endpoint_profile"] = "b_internal_monitor_resume_v1"
+            else:
+                result = b_client.delete_monitor_target(int(target_id))
+                verb = "已删除监控对象"
+                state["endpoint_profile"] = "b_internal_monitor_delete_v1"
+
+            name = str(selected.get("name") or "未命名")
+            state["status"] = "succeeded"
+            state["result_summary"] = "\n".join(
+                [
+                    f"{verb}。",
+                    f"- 选择编号：第 {selected_index} 个",
+                    f"- 名称：{name}",
+                    f"- 对象ID：{int(target_id)}",
+                ]
+            )
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.manage"
+            state["readiness_status"] = "ready"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p11d_manage_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
 
         elif intent_code == "ecom_watch.product_detail":
             product_id = slots.get("product_id")
@@ -833,6 +1030,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"加入监控失败：{str(e)}"
             elif intent_code == "ecom_watch.discovery_search":
                 state["result_summary"] = f"搜索失败：{str(e)}"
+            elif intent_code == "ecom_watch.manage_monitor_target":
+                state["result_summary"] = f"操作失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"
@@ -942,14 +1141,14 @@ def format_b_monitor_targets_result(data: dict) -> str:
     if not targets:
         return "当前没有活跃监控对象。"
     lines = [f"当前监控对象（共 {len(targets)} 个）："]
-    for item in targets[:10]:
+    for idx, item in enumerate(targets[:10], start=1):
         if isinstance(item, dict):
-            pid = item.get("id") or item.get("product_id") or "N/A"
+            pid = item.get("id") or item.get("product_id") or item.get("target_id") or "N/A"
             name = item.get("name") or item.get("product_name") or "未命名"
             status = item.get("status") or ("active" if item.get("is_active", True) else "inactive")
-            lines.append(f"- #{pid} {name}（{status}）")
+            lines.append(f"- {idx}. {name}（{status}，ID={pid}）")
         else:
-            lines.append(f"- {item}")
+            lines.append(f"- {idx}. {item}")
     return "\n".join(lines)
 
 

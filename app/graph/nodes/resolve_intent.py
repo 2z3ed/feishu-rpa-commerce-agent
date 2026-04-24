@@ -37,6 +37,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_targets(normalized_text)
 
+    # P11-D: manage monitor target (pause / resume / delete) by index.
+    if not intent_code:
+        intent_code, slots = try_match_b_manage_monitor_target(normalized_text)
+
     # P10: query product detail from B service.
     if not intent_code:
         intent_code, slots = try_match_b_product_detail(normalized_text)
@@ -96,6 +100,20 @@ def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
     monitor_keywords = ("看看当前监控对象", "当前监控哪些商品", "监控列表")
     if any(keyword in text for keyword in monitor_keywords):
         return "ecom_watch.monitor_targets", {}
+    return None, {}
+
+
+def try_match_b_manage_monitor_target(text: str) -> tuple[str | None, dict]:
+    patterns = (
+        (r"^(暂停监控|暂停)\s*第\s*(\d+)\s*个$", "pause"),
+        (r"^(恢复监控|恢复)\s*第\s*(\d+)\s*个$", "resume"),
+        (r"^(删除监控|删除)\s*第\s*(\d+)\s*个$", "delete"),
+    )
+    for pattern, action in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        return "ecom_watch.manage_monitor_target", {"action": action, "index": int(match.group(2))}
     return None, {}
 
 
