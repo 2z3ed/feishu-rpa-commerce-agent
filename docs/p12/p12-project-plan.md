@@ -1,210 +1,176 @@
-# P12-B 开发主线文档
+# P12-C 开发主线文档
 
-## 当前阶段
+## 阶段名称
 
-P12-B：候选结果卡片按钮回调版
+P12-C：监控对象管理卡片版
 
 ## 一、阶段背景
 
-P12-A 已完成：
+P12-A 已完成候选结果卡片展示。  
+P12-B 已完成候选卡片“加入监控”按钮回调。
 
-- discovery 成功结果已可优先返回飞书候选结果卡片
-- 卡片展示 query / batch_id / 前 3~5 条候选
-- 卡片失败可降级文本
-- 文本方式“加入监控第 N 个”仍然可用
+当前老板交互中，还有一条仍然是纯文本：
 
-P12-B 不重新做 discovery，也不重新做候选卡片展示。
+看看当前监控对象
+它现在能返回监控对象列表，但展示形态还是文本，不利于老板快速判断哪些对象 active、inactive，也不方便后续做管理动作。
 
-本轮只在 P12-A 的卡片基础上增加一个前台交互能力：
+所以 P12-C 的目标不是新增业务能力，而是把已有 monitor list 结果升级为飞书管理卡片。
 
-用户点击候选旁边的“加入监控”按钮后，系统复用已有 add-from-candidates 链路完成纳管。
-
-## 二、当前唯一目标
+二、本轮唯一目标
 
 只做：
 
-候选结果卡片中的“加入监控”按钮回调。
+把“看看当前监控对象”的成功回复升级为监控对象管理卡片。
 
-目标链路：
+卡片最小展示：
 
-1. 飞书发送：搜索商品：xxx
-2. 系统返回候选结果卡片
-3. 每条候选有“加入监控”按钮
-4. 用户点击按钮
-5. A 项目接收卡片 action 回调
-6. A 根据 payload 解析 batch_id 与候选编号
-7. A 调用 B 项目现有 add-from-candidates 能力
-8. 成功后补发文本：“已加入监控”
-9. 失败时返回老板可读错误
+当前监控对象总数
+对象名称
+对象ID
+状态 active / inactive
+URL
+最小操作按钮：暂停 / 恢复
+三、当前固定边界
 
-## 三、项目分工不变
+A 项目仍是：
 
-A 项目：feishu-rpa-commerce-agent
+飞书入口层
+消息编排层
+老板交互层
 
-职责：
+B 项目仍是：
 
-- 飞书入口层
-- 消息编排层
-- 老板交互层
-- 卡片展示与回调接入层
-
-B 项目：Ecom-Watch-Agent-Agent
-
-职责：
-
-- discovery 搜索
-- candidate batch 保存
-- add-from-candidates 纳管
-- monitor 对象管理
+业务服务层
+monitor target 数据与动作提供方
 
 固定原则：
 
-- 不合并 A / B
-- A 调 B 继续按 Envelope 解包
-- B 默认地址继续使用 http://127.0.0.1:8005
-- 不把 B 的业务逻辑搬进 A
-
-## 四、本轮允许做
+不合并 A / B
+A 调 B 继续按 Envelope 解包
+B 默认地址继续为 http://127.0.0.1:8005
+不把 B 的业务逻辑搬进 A
+不重写 P12-A / P12-B
+四、本轮允许做
 
 允许：
 
-1. 给 P12-A 候选卡片增加“加入监控”按钮
-2. 增加最小卡片 action 回调入口
-3. 在按钮 value 中携带最小 payload
-4. 回调后复用现有 add-from-candidates 能力
-5. 点击成功后补发文本结果
-6. 点击失败后补发老板可读错误文本
-7. 保留原文本方式“加入监控第 N 个”
-
-## 五、本轮禁止做
+新增 monitor target 管理卡片 builder
+“看看当前监控对象”成功时优先返回卡片
+卡片失败时 fallback 文本
+卡片展示前 5 条监控对象
+active 对象展示“暂停监控”按钮
+inactive 对象展示“恢复监控”按钮
+点击暂停 / 恢复后复用现有 monitor 管理能力
+成功后补发老板可读文本
+失败后补发老板可读错误
+五、本轮禁止做
 
 禁止：
 
-- 不做监控对象管理卡片
-- 不做 pause / resume / delete 按钮
-- 不做分页
-- 不做卡片表单
-- 不做复杂卡片状态同步
-- 不做卡片更新态系统
-- 不做公网回调平台化
-- 不切 PostgreSQL
-- 不新增业务动作
-- 不重写 discovery 主链
-- 不重写 add-from-candidates 主链
-- 不破坏 P10 / P11 / P12-A 已收口链路
+不做删除按钮
+不做批量暂停 / 批量恢复
+不做分页
+不做搜索过滤
+不做复杂卡片状态同步
+不做卡片局部刷新
+不做 PostgreSQL 切换
+不新增业务动作
+不重写 P12-A / P12-B
+不破坏候选卡片“加入监控”按钮
+不破坏文本命令
+六、最小按钮 payload
 
-## 六、最小 payload 设计
+暂停按钮：
 
-按钮 value 最小字段：
-
-```json
 {
-  "action": "add_from_candidate",
-  "batch_id": 1,
-  "candidate_index": 1,
-  "query": "重力毯"
+  "action": "pause_monitor_target",
+  "target_id": 7,
+  "source": "monitor_list_card"
 }
+
+恢复按钮：
+
+{
+  "action": "resume_monitor_target",
+  "target_id": 7,
+  "source": "monitor_list_card"
+}
+
 字段说明：
 
-action：固定为 add_from_candidate
-batch_id：来自 discovery batch
-candidate_index：候选序号，从 1 开始
-query：原始搜索词，仅用于展示和排查
-
-注意：
-
-candidate_index 面向老板展示，从 1 开始
-内部取数组时如需转换，必须显式处理 index - 1
-不允许只传 URL 后绕过 batch 体系
-不允许绕过 B 的 add-from-candidates 能力
+action：固定动作名
+target_id：监控对象ID
+source：用于排查来源
 七、建议实现顺序
-P12-B.0：回调入口锚定
+P12-C.0：锚定现有监控对象查询链
 
 先确认：
 
-当前长连接入口是否支持卡片 action trigger
-SDK 注册方法是否存在
-action payload 在 raw event 中的位置
-回调能否拿到 open_id / chat_id / message_id
-回调失败时如何安全返回
+“看看当前监控对象”当前 intent_code 是什么
+当前 execute_action 如何调用 B
+当前 result_summary 文本如何生成
+当前是否已有 pause / resume 文本命令能力
+如果没有 pause / resume 能力，本轮先只做展示卡片，不做按钮落地
+P12-C.1：管理卡片 builder
 
-不确定时先打印最小结构，不要大改主链。
+新增独立 builder，建议位置：
 
-P12-B.1：按钮建模
+app/services/feishu/cards/monitor_targets.py
 
-在 P12-A 卡片 builder 中给每条候选增加按钮。
+不要把卡片 JSON 散写在 execute_action 或 ingress_tasks 中。
 
-要求：
+P12-C.2：成功路径替换
 
-按钮文案：加入监控
-每条候选一个按钮
-value 中携带 action / batch_id / candidate_index / query
-不做 pause / resume / delete
-不做分页
-P12-B.2：回调任务接入
+当“看看当前监控对象”成功时：
 
-卡片回调入口不要直接堆复杂业务。
+优先构建管理卡片
+优先发送 interactive 卡片
+发送失败 fallback 原文本列表
+P12-C.3：暂停 / 恢复按钮回调
 
-建议：
+如果现有 B 服务已有 pause / resume 能力，则接入。
 
-入口只做解析、校验、入队或调用既有服务函数
-业务执行复用 add-from-candidates
-成功/失败结果统一老板可读文本
-P12-B.3：结果反馈
+如果没有，则不要硬造业务能力，先回报：
 
-本轮优先用“补发文本”反馈，不做复杂卡片更新。
+当前 B 未提供 pause/resume 能力，P12-C 本轮只能完成管理卡片展示，按钮动作后移。
+P12-C.4：最小验收
 
-成功文本至少包含：
+必须验证：
 
-已加入监控
-选择编号
-名称
-URL
-对象ID
-状态
-
-失败文本至少包含：
-
-未能加入监控
-失败原因
-可继续使用“加入监控第 N 个”重试
-P12-B.4：最小回归
-
-必须确认：
-
-搜索商品仍能返回卡片
-点击按钮能加入监控
-文本方式“加入监控第 N 个”仍能加入监控
-搜索失败仍是文本错误
-看看当前监控对象仍能返回
+看看当前监控对象 → 返回管理卡片
+卡片展示对象名称、状态、URL、ID
+卡片失败时 fallback 文本
+P12-A 搜索卡片不退化
+P12-B 加入监控按钮不退化
+文本加入监控仍可用
 八、通过标准
 
-P12-B 通过必须满足：
+P12-C 通过条件：
 
-搜索商品：重力毯 能返回候选卡片
-每条候选都有“加入监控”按钮
-点击第 1 条按钮后能成功纳管
-成功后能补发老板可读文本
-再发“加入监控第 2 个”仍能成功
-失败场景不吐堆栈
-P12-A 展示能力不退化
-P10 / P11 主链不被破坏
+“看看当前监控对象”优先返回管理卡片
+卡片展示信息完整
+失败 fallback 文本
+不破坏 P12-A
+不破坏 P12-B
+不混入删除 / 分页 / PostgreSQL
+如果 pause / resume 已接入，必须实机验证成功
+如果 pause / resume 未接入，必须明确记录后移原因
 九、提交边界
 
-本轮允许提交：
+允许提交：
 
 AGENTS.md
-docs/p12/p12-project-plan.md
-docs/p12/P12-agent-prompt.md
-docs/p12/p12-boss-demo-sop.md
-docs/p12/p12-acceptance-checklist.md
-P12-B 相关最小代码
-P12-B 相关最小测试
+README.md 增量
+docs/p12 四份约束文件
+monitor card builder
+P12-C 最小回调代码
+P12-C 最小测试
 
-不允许混入：
+禁止提交：
 
-P12-C 监控管理卡片
-PostgreSQL 切换
-其他重构
-无关文档
+无关重构
+P12-D 内容
+删除按钮
+分页
+PostgreSQL
 临时日志

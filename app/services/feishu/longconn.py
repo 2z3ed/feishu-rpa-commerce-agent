@@ -21,6 +21,7 @@ from app.core.constants import TaskStatus
 from app.db.session import SessionLocal
 from app.db.models import TaskRecord
 from app.graph.nodes.execute_action import execute_action, _load_latest_discovery_context
+from app.clients.b_service_client import BServiceClient
 
 
 class FeishuLongConnListener:
@@ -397,18 +398,35 @@ class FeishuLongConnListener:
         return envelope
 
     @staticmethod
-    def _parse_card_action_payload(raw_dict: dict) -> tuple[str, int, int, str]:
+    def _parse_card_action_payload(raw_dict: dict) -> dict:
         event = raw_dict.get("event") if isinstance(raw_dict.get("event"), dict) else {}
         action = event.get("action") if isinstance(event.get("action"), dict) else {}
         value = action.get("value") if isinstance(action.get("value"), dict) else {}
         action_name = str(value.get("action") or "").strip()
+        if not action_name:
+            raise ValueError("payload 缺少 action")
+        return value
+
+    @staticmethod
+    def _parse_add_from_candidate_payload(value: dict) -> tuple[int, int, str]:
         try:
             batch_id = int(value.get("batch_id"))
             candidate_index = int(value.get("candidate_index"))
         except Exception as exc:
             raise ValueError("payload 缺少有效 batch_id 或 candidate_index") from exc
         query = str(value.get("query") or "").strip()
-        return action_name, batch_id, candidate_index, query
+        return batch_id, candidate_index, query
+
+    @staticmethod
+    def _parse_manage_monitor_payload(value: dict) -> tuple[str, int]:
+        action_name = str(value.get("action") or "").strip()
+        try:
+            target_id = int(value.get("target_id"))
+        except Exception as exc:
+            raise ValueError("payload 缺少有效 target_id") from exc
+        if action_name not in {"pause_monitor_target", "resume_monitor_target"}:
+            raise ValueError("不支持的管理动作")
+        return action_name, target_id
 
     @staticmethod
     def _resolve_card_reply_target(chat_id: str, open_id: str) -> tuple[str, str]:
@@ -419,6 +437,7 @@ class FeishuLongConnListener:
         return "open_id", normalized_open_id
 
     def _handle_card_action_event(self, data):
+        action_name = ""
         try:
             raw_dict = self._extract_card_action_envelope(data)
             logger.info(
@@ -440,48 +459,75 @@ class FeishuLongConnListener:
             open_message_id = str(event.get("open_message_id") or "")
             chat_id = str(event.get("chat_id") or ((event.get("context") or {}).get("open_chat_id") if isinstance(event.get("context"), dict) else "") or "")
 
-            action_name, batch_id, candidate_index, query = self._parse_card_action_payload(raw_dict)
+            value = self._parse_card_action_payload(raw_dict)
+            action_name = str(value.get("action") or "").strip()
             logger.info(
-                "=== P12 CARD ACTION PAYLOAD === action=%s, batch_id=%s, candidate_index=%s, query=%s, chat_id=%s, open_id=%s",
+                "=== P12 CARD ACTION PAYLOAD === action=%s, value=%s, chat_id=%s, open_id=%s",
                 action_name,
-                batch_id,
-                candidate_index,
-                query,
+                value,
                 chat_id,
                 open_id,
             )
-            if action_name != "add_from_candidate":
+            if action_name not in {"add_from_candidate", "pause_monitor_target", "resume_monitor_target"}:
                 logger.info("Ignore unsupported card action: %s", action_name)
                 return
-            if candidate_index <= 0:
-                raise ValueError("候选编号必须是大于 0 的整数")
-            if not open_id:
-                raise ValueError("无法识别操作人，缺少 open_id")
 
-            context = _load_latest_discovery_context(chat_id=chat_id, user_open_id=open_id)
-            if not context:
-                raise ValueError("候选结果已失效，请先发送“搜索商品：关键词”")
-            context_batch_id = context.get("batch_id")
-            if context_batch_id in (None, "") or int(context_batch_id) != batch_id:
-                raise ValueError("候选结果批次不匹配，请重新搜索商品后再试")
+            if action_name == "add_from_candidate":
+                batch_id, candidate_index, query = self._parse_add_from_candidate_payload(value)
+                if candidate_index <= 0:
+                    raise ValueError("候选编号必须是大于 0 的整数")
+                if not open_id:
+                    raise ValueError("无法识别操作人，缺少 open_id")
 
-            action_state = {
-                "intent_code": "ecom_watch.add_from_candidates",
-                "slots": {"index": candidate_index},
-                "status": "processing",
-                "source_chat_id": chat_id,
-                "user_open_id": open_id,
-            }
-            logger.info(
-                "=== P12 CARD ACTION ADD START === batch_id=%s, candidate_index=%s, query=%s, chat_id=%s, open_id=%s",
-                batch_id,
-                candidate_index,
-                query,
-                chat_id,
-                open_id,
-            )
-            result = execute_action(action_state)
-            result_text = str(result.get("result_summary") or "").strip() or "未能加入监控，请稍后重试。"
+                context = _load_latest_discovery_context(chat_id=chat_id, user_open_id=open_id)
+                if not context:
+                    raise ValueError("候选结果已失效，请先发送“搜索商品：关键词”")
+                context_batch_id = context.get("batch_id")
+                if context_batch_id in (None, "") or int(context_batch_id) != batch_id:
+                    raise ValueError("候选结果批次不匹配，请重新搜索商品后再试")
+
+                action_state = {
+                    "intent_code": "ecom_watch.add_from_candidates",
+                    "slots": {"index": candidate_index},
+                    "status": "processing",
+                    "source_chat_id": chat_id,
+                    "user_open_id": open_id,
+                }
+                logger.info(
+                    "=== P12 CARD ACTION ADD START === batch_id=%s, candidate_index=%s, query=%s, chat_id=%s, open_id=%s",
+                    batch_id,
+                    candidate_index,
+                    query,
+                    chat_id,
+                    open_id,
+                )
+                result = execute_action(action_state)
+                result_text = str(result.get("result_summary") or "").strip() or "未能加入监控，请稍后重试。"
+                logger.info(
+                    "=== P12 CARD ACTION ADD SUCCESS === action=%s batch_id=%s index=%s open_message_id=%s query=%s status=%s",
+                    action_name,
+                    batch_id,
+                    candidate_index,
+                    open_message_id,
+                    query,
+                    result.get("status"),
+                )
+            else:
+                action_name, target_id = self._parse_manage_monitor_payload(value)
+                b_client = BServiceClient()
+                if action_name == "pause_monitor_target":
+                    b_client.pause_monitor_target(target_id)
+                    result_text = f"已暂停监控。\n- 对象ID：{target_id}\n- 状态：inactive"
+                else:
+                    b_client.resume_monitor_target(target_id)
+                    result_text = f"已恢复监控。\n- 对象ID：{target_id}\n- 状态：active"
+                logger.info(
+                    "=== P12-C MONITOR MANAGE SUCCESS === action=%s target_id=%s open_message_id=%s",
+                    action_name,
+                    target_id,
+                    open_message_id,
+                )
+
             reply_target_type, reply_target_id = self._resolve_card_reply_target(chat_id=chat_id, open_id=open_id)
             logger.info(
                 "=== P12 CARD ACTION REPLY TARGET === target_type=%s target_id=%s",
@@ -492,17 +538,11 @@ class FeishuLongConnListener:
                 feishu_client.send_text_message(receive_id=reply_target_id, text=result_text, receive_id_type="chat_id")
             else:
                 feishu_client.send_text_message(receive_id=reply_target_id, text=result_text, receive_id_type="open_id")
-            logger.info(
-                "=== P12 CARD ACTION ADD SUCCESS === action=%s batch_id=%s index=%s open_message_id=%s query=%s status=%s",
-                action_name,
-                batch_id,
-                candidate_index,
-                open_message_id,
-                query,
-                result.get("status"),
-            )
         except Exception as e:
-            error_text = f"未能加入监控。\n原因：{str(e)}\n可继续使用“加入监控第 N 个”重试。"
+            if action_name in {"pause_monitor_target", "resume_monitor_target"}:
+                error_text = f"未能完成监控操作。\n原因：{str(e)}"
+            else:
+                error_text = f"未能加入监控。\n原因：{str(e)}\n可继续使用“加入监控第 N 个”重试。"
             try:
                 raw_dict = self._extract_card_action_envelope(data)
                 event = raw_dict.get("event") if isinstance(raw_dict.get("event"), dict) else {}

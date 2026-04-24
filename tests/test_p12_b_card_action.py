@@ -41,11 +41,11 @@ def test_parse_card_action_payload():
             }
         }
     }
-    action_name, batch_id, candidate_index, query = FeishuLongConnListener._parse_card_action_payload(raw)
-    assert action_name == "add_from_candidate"
-    assert batch_id == 9
-    assert candidate_index == 2
-    assert query == "重力毯"
+    value = FeishuLongConnListener._parse_card_action_payload(raw)
+    assert value["action"] == "add_from_candidate"
+    assert value["batch_id"] == 9
+    assert value["candidate_index"] == 2
+    assert value["query"] == "重力毯"
 
 
 def test_card_action_handler_reuses_add_from_candidates(monkeypatch):

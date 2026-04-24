@@ -10,6 +10,7 @@ from app.db.models import TaskRecord, TaskStep
 from app.graph.builder import graph as lang_graph
 from app.services.feishu.client import FeishuClient
 from app.services.feishu.cards.discovery_candidates import build_discovery_candidates_card
+from app.services.feishu.cards.monitor_targets import build_monitor_targets_card
 from app.services.feishu.bitable_write import try_write_bitable_ledger
 from app.utils.task_logger import log_step
 from app.core.time import get_shanghai_now
@@ -261,8 +262,10 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 interactive_attempted = False
                 fallback_reason = "not_discovery_or_not_succeeded"
                 try:
-                    # P12-A: only upgrade discovery success reply shape to an interactive card.
-                    if str(result.get("capability") or "") == "discovery.search" and str(result.get("status") or "") == "succeeded":
+                    capability = str(result.get("capability") or "")
+                    status = str(result.get("status") or "")
+                    # P12-A/P12-C: discovery and monitor list success reply can be upgraded to interactive cards.
+                    if capability == "discovery.search" and status == "succeeded":
                         interactive_attempted = True
                         logger.info(
                             "=== P12 CARD SEND ATTEMPT === task_id=%s, message_id=%s, capability=%s, status=%s",
@@ -317,6 +320,55 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                             fallback_reason = "missing_discovery_context_saved_step"
                             logger.warning(
                                 "=== P12 CARD CONTEXT MISSING === task_id=%s, message_id=%s, step_code=discovery_context_saved",
+                                task_id,
+                                source_message_id,
+                            )
+                    elif capability == "monitor.targets" and status == "succeeded":
+                        interactive_attempted = True
+                        logger.info(
+                            "=== P12-C MONITOR CARD SEND ATTEMPT === task_id=%s, message_id=%s, capability=%s, status=%s",
+                            task_id,
+                            source_message_id,
+                            capability,
+                            status,
+                        )
+                        row = (
+                            db.query(TaskStep.detail)
+                            .filter(TaskStep.task_id == task_id, TaskStep.step_code == "monitor_targets_context_saved")
+                            .order_by(TaskStep.created_at.desc())
+                            .first()
+                        )
+                        if row and row[0]:
+                            import json as _json
+
+                            ctx = _json.loads(row[0])
+                            targets = ctx.get("targets") if isinstance(ctx.get("targets"), list) else []
+                            card = build_monitor_targets_card(targets=targets, max_items=5)
+                            logger.info(
+                                "=== P12-C MONITOR CARD BUILT === task_id=%s, message_id=%s, target_count=%s",
+                                task_id,
+                                source_message_id,
+                                len(targets),
+                            )
+                            sent = client.send_interactive_reply(source_message_id, card)
+                            if sent:
+                                logger.info(
+                                    "=== P12-C MONITOR CARD SEND SUCCESS === task_id=%s, message_id=%s",
+                                    task_id,
+                                    source_message_id,
+                                )
+                            else:
+                                fallback_reason = "interactive_reply_returned_false"
+                                logger.warning(
+                                    "=== P12-C MONITOR CARD SEND FAILED === task_id=%s, message_id=%s, reason=%s",
+                                    task_id,
+                                    source_message_id,
+                                    fallback_reason,
+                                )
+                        else:
+                            fallback_reason = "missing_monitor_targets_context_saved_step"
+                            logger.warning(
+                                "=== P12-C MONITOR CARD CONTEXT MISSING === task_id=%s, message_id=%s, step_code=monitor_targets_context_saved",
                                 task_id,
                                 source_message_id,
                             )
