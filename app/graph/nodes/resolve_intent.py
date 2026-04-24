@@ -104,16 +104,61 @@ def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
 
 
 def try_match_b_manage_monitor_target(text: str) -> tuple[str | None, dict]:
+    def _parse_zh_ordinal_index(raw: str) -> int | None:
+        """
+        Parse Chinese ordinal like '第2个' / '第二个' / '第二' into index int.
+        Scope: 1-10 (minimal boss-friendly range).
+        """
+        s = (raw or "").strip()
+        if not s:
+            return None
+        s = re.sub(r"^第\s*", "", s)
+        s = re.sub(r"\s*个$", "", s)
+        if s.isdigit():
+            n = int(s)
+            return n if 1 <= n <= 10 else None
+        mapping = {
+            "一": 1,
+            "二": 2,
+            "三": 3,
+            "四": 4,
+            "五": 5,
+            "六": 6,
+            "七": 7,
+            "八": 8,
+            "九": 9,
+            "十": 10,
+            "1": 1,
+            "2": 2,
+            "3": 3,
+            "4": 4,
+            "5": 5,
+            "6": 6,
+            "7": 7,
+            "8": 8,
+            "9": 9,
+            "10": 10,
+        }
+        n = mapping.get(s)
+        return n if isinstance(n, int) and 1 <= n <= 10 else None
+
     patterns = (
         (r"^(暂停监控|暂停)\s*第\s*(\d+)\s*个$", "pause"),
         (r"^(恢复监控|恢复)\s*第\s*(\d+)\s*个$", "resume"),
         (r"^(删除监控|删除)\s*第\s*(\d+)\s*个$", "delete"),
+        # More colloquial ordinal: 第二个 / 第三个 (no spaces, no digits).
+        (r"^(暂停监控|暂停)\s*(第?[一二三四五六七八九十]个)$", "pause"),
+        (r"^(恢复监控|恢复)\s*(第?[一二三四五六七八九十]个)$", "resume"),
+        (r"^(删除监控|删除)\s*(第?[一二三四五六七八九十]个)$", "delete"),
     )
     for pattern, action in patterns:
         match = re.search(pattern, text)
         if not match:
             continue
-        return "ecom_watch.manage_monitor_target", {"action": action, "index": int(match.group(2))}
+        idx = _parse_zh_ordinal_index(match.group(2))
+        if idx is None:
+            return None, {}
+        return "ecom_watch.manage_monitor_target", {"action": action, "index": idx}
     return None, {}
 
 
