@@ -31,7 +31,7 @@ class FeishuClient:
                 .build()
         return self._client
 
-    def send_text_message(self, receive_id: str, text: str) -> bool:
+    def send_text_message(self, receive_id: str, text: str, receive_id_type: str = "open_id") -> bool:
         try:
             if lark is None:
                 raise RuntimeError("lark_oapi is not installed")
@@ -39,7 +39,7 @@ class FeishuClient:
             
             request = (
                 CreateMessageRequest.builder()
-                .receive_id_type("open_id")
+                .receive_id_type(receive_id_type)
                 .request_body(
                     CreateMessageRequestBody.builder()
                     .receive_id(receive_id)
@@ -51,7 +51,11 @@ class FeishuClient:
             )
             response = self.client.im.v1.message.create(request)
             if response.code == 0:
-                logger.info("Feishu message sent successfully: receive_id=%s", receive_id)
+                logger.info(
+                    "Feishu message sent successfully: receive_id_type=%s, receive_id=%s",
+                    receive_id_type,
+                    receive_id,
+                )
                 return True
             else:
                 logger.error("Feishu message send failed: code=%s, msg=%s", response.code, response.msg)
@@ -91,7 +95,11 @@ class FeishuClient:
 
     def send_interactive_reply(self, message_id: str, card: dict) -> bool:
         try:
-            logger.info("=== FEISHU INTERACTIVE REPLY START ===")
+            logger.info(
+                "=== FEISHU INTERACTIVE REPLY START === message_id=%s, card_keys=%s",
+                message_id,
+                list(card.keys()) if isinstance(card, dict) else [],
+            )
             if lark is None:
                 raise RuntimeError("lark_oapi is not installed")
             from lark_oapi.api.im.v1.model import ReplyMessageRequest, ReplyMessageRequestBody
@@ -112,13 +120,14 @@ class FeishuClient:
                 logger.info("=== FEISHU INTERACTIVE REPLY SUCCESS ===: message_id=%s", message_id)
                 return True
             logger.error(
-                "=== FEISHU INTERACTIVE REPLY FAILED ===: code=%s, msg=%s",
+                "=== FEISHU INTERACTIVE REPLY FAILED ===: message_id=%s, code=%s, msg=%s",
+                message_id,
                 response.code,
                 response.msg,
             )
             return False
         except Exception as e:
-            logger.error("=== FEISHU INTERACTIVE REPLY FAILED ===: %s", str(e))
+            logger.error("=== FEISHU INTERACTIVE REPLY FAILED ===: %s", str(e), exc_info=True)
             return False
 
 

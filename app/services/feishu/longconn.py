@@ -4,18 +4,23 @@ import json
 import sys
 import re
 
-import lark_oapi as lark
-from lark_oapi import EventDispatcherHandler, LogLevel
+try:
+    import lark_oapi as lark
+    from lark_oapi import EventDispatcherHandler, LogLevel
+except Exception:  # pragma: no cover - fallback for unit tests without full SDK
+    lark = None  # type: ignore[assignment]
+    EventDispatcherHandler = None  # type: ignore[assignment]
+    LogLevel = None  # type: ignore[assignment]
 
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.feishu.parser import parse_p2_im_message_receive_v1, FeishuMessageEvent
 from app.services.feishu.idempotency import idempotency_service
 from app.services.feishu.client import feishu_client
-from app.tasks.ingress_tasks import process_ingress_message
 from app.core.constants import TaskStatus
 from app.db.session import SessionLocal
 from app.db.models import TaskRecord
+from app.graph.nodes.execute_action import execute_action, _load_latest_discovery_context
 
 
 class FeishuLongConnListener:
@@ -24,7 +29,7 @@ class FeishuLongConnListener:
         self._running = False
         self._thread = None
 
-    def _handle_message_event(self, data: lark.im.v1.P2ImMessageReceiveV1):
+    def _handle_message_event(self, data):
         # ===== 绝对入口日志 =====
         print(f"===========================================>", file=sys.stderr)
         print(f">>> ENTER _handle_message_event with data type: {type(data)}", file=sys.stderr)
@@ -89,6 +94,7 @@ class FeishuLongConnListener:
 
             # ========== Celery 入队 ==========
             logger.info("=== CELERY ENQUEUE START === task_id=%s", new_task_id)
+            from app.tasks.ingress_tasks import process_ingress_message
             task = process_ingress_message.delay(
                 new_task_id, 
                 message_event.text, 
@@ -150,16 +156,389 @@ class FeishuLongConnListener:
         except Exception as e:
             logger.error("Error handling message event: %s", str(e), exc_info=True)
 
+    @staticmethod
+    def _safe_to_dict(value):
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "to_dict"):
+            try:
+                d = value.to_dict()
+                if isinstance(d, dict):
+                    return d
+            except Exception:
+                pass
+        # Some Feishu SDK models expose fields via attributes only.
+        raw_attrs = getattr(value, "__dict__", None)
+        if isinstance(raw_attrs, dict):
+            out: dict = {}
+            for k, v in raw_attrs.items():
+                if k.startswith("_"):
+                    continue
+                if isinstance(v, (str, int, float, bool)) or v is None:
+                    out[k] = v
+                    continue
+                nested = FeishuLongConnListener._safe_to_dict(v)
+                if nested is not None:
+                    out[k] = nested
+            if out:
+                return out
+        return None
+
+    @staticmethod
+    def _safe_json_loads(value):
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        if not (text.startswith("{") and text.endswith("}")):
+            return None
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _coerce_value_to_dict(value):
+        if isinstance(value, dict):
+            return value
+        dict_value = FeishuLongConnListener._safe_to_dict(value)
+        if isinstance(dict_value, dict):
+            return dict_value
+        if isinstance(value, str):
+            parsed = FeishuLongConnListener._safe_json_loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        return {}
+
+    @staticmethod
+    def _walk_for_card_fields(node, result: dict, depth: int = 0, max_depth: int = 8):
+        if node is None or depth > max_depth:
+            return
+
+        if isinstance(node, str):
+            parsed = FeishuLongConnListener._safe_json_loads(node)
+            if parsed:
+                FeishuLongConnListener._walk_for_card_fields(parsed, result, depth + 1, max_depth)
+            return
+
+        if isinstance(node, dict):
+            if "open_id" in node and not result.get("open_id"):
+                result["open_id"] = str(node.get("open_id") or "")
+            if "open_chat_id" in node and not result.get("chat_id"):
+                result["chat_id"] = str(node.get("open_chat_id") or "")
+            if "chat_id" in node and not result.get("chat_id"):
+                result["chat_id"] = str(node.get("chat_id") or "")
+            if "open_message_id" in node and not result.get("open_message_id"):
+                result["open_message_id"] = str(node.get("open_message_id") or "")
+            if "action" in node:
+                action_candidate = FeishuLongConnListener._coerce_value_to_dict(node.get("action"))
+                if action_candidate and not result.get("action_dict"):
+                    result["action_dict"] = action_candidate
+            if "value" in node and not result.get("value_dict"):
+                value_candidate = FeishuLongConnListener._coerce_value_to_dict(node.get("value"))
+                if value_candidate:
+                    result["value_dict"] = value_candidate
+            if "payload" in node and not result.get("raw_payload_text"):
+                payload_text = node.get("payload")
+                if isinstance(payload_text, str):
+                    result["raw_payload_text"] = payload_text
+            for v in node.values():
+                FeishuLongConnListener._walk_for_card_fields(v, result, depth + 1, max_depth)
+            return
+
+        if isinstance(node, (list, tuple, set)):
+            for item in node:
+                FeishuLongConnListener._walk_for_card_fields(item, result, depth + 1, max_depth)
+            return
+
+        obj_dict = FeishuLongConnListener._safe_to_dict(node)
+        if isinstance(obj_dict, dict):
+            FeishuLongConnListener._walk_for_card_fields(obj_dict, result, depth + 1, max_depth)
+            return
+
+        attrs = ("payload", "raw_payload", "body", "raw", "event", "header", "action", "context", "operator", "value")
+        for attr in attrs:
+            try:
+                attr_value = getattr(node, attr, None)
+            except Exception:
+                continue
+            if attr_value is None:
+                continue
+            if attr in ("payload", "raw_payload", "body", "raw") and isinstance(attr_value, str) and not result.get("raw_payload_text"):
+                result["raw_payload_text"] = attr_value
+            FeishuLongConnListener._walk_for_card_fields(attr_value, result, depth + 1, max_depth)
+
+    def _extract_card_action_envelope_layer1(self, data) -> dict:
+        event_obj = getattr(data, "event", None)
+        header_obj = getattr(data, "header", None)
+        action_obj = getattr(event_obj, "action", None)
+        context_obj = getattr(event_obj, "context", None)
+        operator_obj = getattr(event_obj, "operator", None)
+        value_obj = getattr(action_obj, "value", None)
+
+        value_dict = self._coerce_value_to_dict(value_obj)
+        action_dict = self._coerce_value_to_dict(action_obj)
+        context_dict = self._coerce_value_to_dict(context_obj)
+        operator_dict = self._coerce_value_to_dict(operator_obj)
+        header_dict = self._coerce_value_to_dict(header_obj)
+        event_dict = self._coerce_value_to_dict(event_obj)
+        if action_dict:
+            if value_dict:
+                action_dict["value"] = value_dict
+            event_dict["action"] = action_dict
+        elif value_dict:
+            event_dict["action"] = {"value": value_dict}
+        if context_dict:
+            event_dict["context"] = context_dict
+        if operator_dict:
+            event_dict["operator"] = operator_dict
+
+        open_id = str(getattr(operator_obj, "open_id", "") or operator_dict.get("open_id") or "")
+        chat_id = str(getattr(context_obj, "open_chat_id", "") or context_dict.get("open_chat_id") or event_dict.get("chat_id") or "")
+        open_message_id = str(getattr(context_obj, "open_message_id", "") or context_dict.get("open_message_id") or event_dict.get("open_message_id") or "")
+
+        if chat_id and "chat_id" not in event_dict:
+            event_dict["chat_id"] = chat_id
+        if open_message_id and "open_message_id" not in event_dict:
+            event_dict["open_message_id"] = open_message_id
+        if open_id and "open_id" not in event_dict:
+            event_dict["open_id"] = open_id
+
+        return {"header": header_dict, "event": event_dict}
+
+    def _extract_card_action_envelope(self, data) -> dict:
+        # Layer 1: direct SDK object attribute access.
+        envelope = self._extract_card_action_envelope_layer1(data)
+        event_dict = envelope.get("event") if isinstance(envelope.get("event"), dict) else {}
+        action_dict = event_dict.get("action") if isinstance(event_dict.get("action"), dict) else {}
+        value_dict = action_dict.get("value") if isinstance(action_dict.get("value"), dict) else {}
+        if value_dict.get("action") and value_dict.get("batch_id") is not None and value_dict.get("candidate_index") is not None:
+            logger.info(
+                "=== P12 CARD ACTION RAW FALLBACK === data_type=%s, payload_text_len=%s, has_header=%s, has_event=%s",
+                type(data),
+                0,
+                hasattr(data, "header"),
+                hasattr(data, "event"),
+            )
+            logger.info("=== P12 CARD ACTION ENVELOPE BUILT === keys=%s event_keys=%s", list(envelope.keys()), list(event_dict.keys()))
+            return envelope
+
+        # Layer 2: recursively inspect SDK raw object structure.
+        recursive_result = {}
+        self._walk_for_card_fields(data, recursive_result)
+        rec_open_id = str(recursive_result.get("open_id") or "")
+        rec_chat_id = str(recursive_result.get("chat_id") or "")
+        rec_open_message_id = str(recursive_result.get("open_message_id") or "")
+        rec_action_dict = recursive_result.get("action_dict") if isinstance(recursive_result.get("action_dict"), dict) else {}
+        rec_value_dict = recursive_result.get("value_dict") if isinstance(recursive_result.get("value_dict"), dict) else {}
+        if rec_value_dict:
+            if not rec_action_dict:
+                rec_action_dict = {}
+            rec_action_dict["value"] = rec_value_dict
+        if rec_action_dict and "action" not in event_dict:
+            event_dict["action"] = rec_action_dict
+        elif rec_action_dict and isinstance(event_dict.get("action"), dict):
+            event_dict["action"].update(rec_action_dict)
+        if rec_open_id and not ((event_dict.get("operator") or {}).get("open_id") if isinstance(event_dict.get("operator"), dict) else ""):
+            event_dict["operator"] = {"open_id": rec_open_id}
+        if rec_chat_id and not event_dict.get("chat_id"):
+            event_dict["chat_id"] = rec_chat_id
+        if rec_open_message_id and not event_dict.get("open_message_id"):
+            event_dict["open_message_id"] = rec_open_message_id
+        envelope["event"] = event_dict
+        action_dict = event_dict.get("action") if isinstance(event_dict.get("action"), dict) else {}
+        value_dict = action_dict.get("value") if isinstance(action_dict.get("value"), dict) else {}
+        if value_dict.get("action") and value_dict.get("batch_id") is not None and value_dict.get("candidate_index") is not None:
+            logger.info(
+                "=== P12 CARD ACTION RAW FALLBACK === data_type=%s, payload_text_len=%s, has_header=%s, has_event=%s",
+                type(data),
+                len(str(recursive_result.get("raw_payload_text") or "")),
+                hasattr(data, "header"),
+                hasattr(data, "event"),
+            )
+            logger.info("=== P12 CARD ACTION ENVELOPE BUILT === keys=%s event_keys=%s", list(envelope.keys()), list(event_dict.keys()))
+            return envelope
+
+        # Layer 3: fallback from raw payload JSON string.
+        raw_payload_text = str(recursive_result.get("raw_payload_text") or "")
+        logger.info(
+            "=== P12 CARD ACTION RAW FALLBACK === data_type=%s, payload_text_len=%s, has_header=%s, has_event=%s",
+            type(data),
+            len(raw_payload_text),
+            hasattr(data, "header"),
+            hasattr(data, "event"),
+        )
+        raw_payload_dict = self._safe_json_loads(raw_payload_text) if raw_payload_text else None
+        if isinstance(raw_payload_dict, dict):
+            raw_event = raw_payload_dict.get("event") if isinstance(raw_payload_dict.get("event"), dict) else {}
+            raw_header = raw_payload_dict.get("header") if isinstance(raw_payload_dict.get("header"), dict) else {}
+            if raw_header and not envelope.get("header"):
+                envelope["header"] = raw_header
+            if raw_event:
+                if not event_dict:
+                    envelope["event"] = raw_event
+                else:
+                    for k, v in raw_event.items():
+                        if k not in event_dict:
+                            event_dict[k] = v
+                    envelope["event"] = event_dict
+
+        logger.info(
+            "=== P12 CARD ACTION ENVELOPE BUILT === keys=%s event_keys=%s",
+            list(envelope.keys()),
+            list((envelope.get("event") if isinstance(envelope.get("event"), dict) else {}).keys()),
+        )
+        return envelope
+
+    @staticmethod
+    def _parse_card_action_payload(raw_dict: dict) -> tuple[str, int, int, str]:
+        event = raw_dict.get("event") if isinstance(raw_dict.get("event"), dict) else {}
+        action = event.get("action") if isinstance(event.get("action"), dict) else {}
+        value = action.get("value") if isinstance(action.get("value"), dict) else {}
+        action_name = str(value.get("action") or "").strip()
+        try:
+            batch_id = int(value.get("batch_id"))
+            candidate_index = int(value.get("candidate_index"))
+        except Exception as exc:
+            raise ValueError("payload 缺少有效 batch_id 或 candidate_index") from exc
+        query = str(value.get("query") or "").strip()
+        return action_name, batch_id, candidate_index, query
+
+    @staticmethod
+    def _resolve_card_reply_target(chat_id: str, open_id: str) -> tuple[str, str]:
+        normalized_chat_id = str(chat_id or "").strip()
+        normalized_open_id = str(open_id or "").strip()
+        if normalized_chat_id:
+            return "chat", normalized_chat_id
+        return "open_id", normalized_open_id
+
+    def _handle_card_action_event(self, data):
+        try:
+            raw_dict = self._extract_card_action_envelope(data)
+            logger.info(
+                "=== P12 CARD ACTION RECEIVED === raw_payload=%s",
+                json.dumps(raw_dict, ensure_ascii=False)[:1000],
+            )
+
+            header = raw_dict.get("header") if isinstance(raw_dict.get("header"), dict) else {}
+            event = raw_dict.get("event") if isinstance(raw_dict.get("event"), dict) else {}
+            action = event.get("action") if isinstance(event.get("action"), dict) else {}
+
+            open_id = (
+                (header.get("user_id") if isinstance(header, dict) else None)
+                or ((event.get("operator") or {}).get("open_id") if isinstance(event.get("operator"), dict) else None)
+                or (event.get("open_id") if isinstance(event, dict) else None)
+                or ((action.get("open_id")) if isinstance(action, dict) else None)
+                or ""
+            )
+            open_message_id = str(event.get("open_message_id") or "")
+            chat_id = str(event.get("chat_id") or ((event.get("context") or {}).get("open_chat_id") if isinstance(event.get("context"), dict) else "") or "")
+
+            action_name, batch_id, candidate_index, query = self._parse_card_action_payload(raw_dict)
+            logger.info(
+                "=== P12 CARD ACTION PAYLOAD === action=%s, batch_id=%s, candidate_index=%s, query=%s, chat_id=%s, open_id=%s",
+                action_name,
+                batch_id,
+                candidate_index,
+                query,
+                chat_id,
+                open_id,
+            )
+            if action_name != "add_from_candidate":
+                logger.info("Ignore unsupported card action: %s", action_name)
+                return
+            if candidate_index <= 0:
+                raise ValueError("候选编号必须是大于 0 的整数")
+            if not open_id:
+                raise ValueError("无法识别操作人，缺少 open_id")
+
+            context = _load_latest_discovery_context(chat_id=chat_id, user_open_id=open_id)
+            if not context:
+                raise ValueError("候选结果已失效，请先发送“搜索商品：关键词”")
+            context_batch_id = context.get("batch_id")
+            if context_batch_id in (None, "") or int(context_batch_id) != batch_id:
+                raise ValueError("候选结果批次不匹配，请重新搜索商品后再试")
+
+            action_state = {
+                "intent_code": "ecom_watch.add_from_candidates",
+                "slots": {"index": candidate_index},
+                "status": "processing",
+                "source_chat_id": chat_id,
+                "user_open_id": open_id,
+            }
+            logger.info(
+                "=== P12 CARD ACTION ADD START === batch_id=%s, candidate_index=%s, query=%s, chat_id=%s, open_id=%s",
+                batch_id,
+                candidate_index,
+                query,
+                chat_id,
+                open_id,
+            )
+            result = execute_action(action_state)
+            result_text = str(result.get("result_summary") or "").strip() or "未能加入监控，请稍后重试。"
+            reply_target_type, reply_target_id = self._resolve_card_reply_target(chat_id=chat_id, open_id=open_id)
+            logger.info(
+                "=== P12 CARD ACTION REPLY TARGET === target_type=%s target_id=%s",
+                reply_target_type,
+                reply_target_id,
+            )
+            if reply_target_type == "chat":
+                feishu_client.send_text_message(receive_id=reply_target_id, text=result_text, receive_id_type="chat_id")
+            else:
+                feishu_client.send_text_message(receive_id=reply_target_id, text=result_text, receive_id_type="open_id")
+            logger.info(
+                "=== P12 CARD ACTION ADD SUCCESS === action=%s batch_id=%s index=%s open_message_id=%s query=%s status=%s",
+                action_name,
+                batch_id,
+                candidate_index,
+                open_message_id,
+                query,
+                result.get("status"),
+            )
+        except Exception as e:
+            error_text = f"未能加入监控。\n原因：{str(e)}\n可继续使用“加入监控第 N 个”重试。"
+            try:
+                raw_dict = self._extract_card_action_envelope(data)
+                event = raw_dict.get("event") if isinstance(raw_dict.get("event"), dict) else {}
+                chat_id = str(event.get("chat_id") or ((event.get("context") or {}).get("open_chat_id") if isinstance(event.get("context"), dict) else "") or "")
+                open_id = (
+                    ((event.get("operator") or {}).get("open_id") if isinstance(event.get("operator"), dict) else "")
+                    or str(event.get("open_id") or "")
+                )
+                reply_target_type, reply_target_id = self._resolve_card_reply_target(chat_id=chat_id, open_id=open_id)
+                logger.info(
+                    "=== P12 CARD ACTION REPLY TARGET === target_type=%s target_id=%s",
+                    reply_target_type,
+                    reply_target_id,
+                )
+                if reply_target_id:
+                    if reply_target_type == "chat":
+                        feishu_client.send_text_message(receive_id=reply_target_id, text=error_text, receive_id_type="chat_id")
+                    else:
+                        feishu_client.send_text_message(receive_id=reply_target_id, text=error_text, receive_id_type="open_id")
+            except Exception:
+                pass
+            logger.error("=== P12 CARD ACTION ADD FAILED === reason=%s", str(e), exc_info=True)
+
     def start(self):
         if self._running:
             logger.warning("Long connection listener already running")
             return
+        if lark is None or EventDispatcherHandler is None or LogLevel is None:
+            raise RuntimeError("lark_oapi SDK 不可用，无法启动飞书长连接监听")
 
         logger.info("Starting Feishu long connection listener... app_id=%s", settings.FEISHU_APP_ID[:10]+"...")
 
         event_handler = (
             EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._handle_message_event)
+            .register_p2_card_action_trigger(self._handle_card_action_event)
             .build()
         )
 

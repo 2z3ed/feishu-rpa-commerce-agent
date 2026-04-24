@@ -6,7 +6,7 @@ from app.workers.celery_app import celery_app
 from app.core.constants import TaskStatus
 from app.core.logging import logger
 from app.db.session import SessionLocal
-from app.db.models import TaskRecord
+from app.db.models import TaskRecord, TaskStep
 from app.graph.builder import graph as lang_graph
 from app.services.feishu.client import FeishuClient
 from app.services.feishu.cards.discovery_candidates import build_discovery_candidates_card
@@ -258,9 +258,19 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 result_text = result.get("result_summary", "任务执行完成")
 
                 sent = False
+                interactive_attempted = False
+                fallback_reason = "not_discovery_or_not_succeeded"
                 try:
                     # P12-A: only upgrade discovery success reply shape to an interactive card.
                     if str(result.get("capability") or "") == "discovery.search" and str(result.get("status") or "") == "succeeded":
+                        interactive_attempted = True
+                        logger.info(
+                            "=== P12 CARD SEND ATTEMPT === task_id=%s, message_id=%s, capability=%s, status=%s",
+                            task_id,
+                            source_message_id,
+                            result.get("capability"),
+                            result.get("status"),
+                        )
                         row = (
                             db.query(TaskStep.detail)
                             .filter(TaskStep.task_id == task_id, TaskStep.step_code == "discovery_context_saved")
@@ -280,12 +290,54 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                                 candidates=candidates,
                                 max_items=5,
                             )
+                            logger.info(
+                                "=== P12 CARD BUILT === task_id=%s, message_id=%s, batch_id=%s, query=%s, candidate_count=%s",
+                                task_id,
+                                source_message_id,
+                                batch_id,
+                                query,
+                                len(candidates),
+                            )
                             sent = client.send_interactive_reply(source_message_id, card)
+                            if sent:
+                                logger.info(
+                                    "=== P12 CARD SEND SUCCESS === task_id=%s, message_id=%s",
+                                    task_id,
+                                    source_message_id,
+                                )
+                            else:
+                                fallback_reason = "interactive_reply_returned_false"
+                                logger.warning(
+                                    "=== P12 CARD SEND FAILED === task_id=%s, message_id=%s, reason=%s",
+                                    task_id,
+                                    source_message_id,
+                                    fallback_reason,
+                                )
+                        else:
+                            fallback_reason = "missing_discovery_context_saved_step"
+                            logger.warning(
+                                "=== P12 CARD CONTEXT MISSING === task_id=%s, message_id=%s, step_code=discovery_context_saved",
+                                task_id,
+                                source_message_id,
+                            )
                 except Exception as card_exc:
-                    logger.warning("P12 discovery card send skipped/fallback: task_id=%s err=%s", task_id, card_exc)
+                    fallback_reason = f"card_send_exception:{card_exc}"
+                    logger.warning(
+                        "P12 discovery card send skipped/fallback: task_id=%s err=%s",
+                        task_id,
+                        card_exc,
+                        exc_info=True,
+                    )
                     sent = False
 
                 if not sent:
+                    logger.info(
+                        "=== P12 FALLBACK TO TEXT === task_id=%s, message_id=%s, interactive_attempted=%s, reason=%s",
+                        task_id,
+                        source_message_id,
+                        interactive_attempted,
+                        fallback_reason,
+                    )
                     logger.info(
                         "=== SENDING FEISHU RESULT TEXT === message_id=%s, result_text=%s",
                         source_message_id,

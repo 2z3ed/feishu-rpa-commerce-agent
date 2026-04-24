@@ -658,15 +658,32 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P11：A 接 B 纳管主线
+P12-B：候选结果卡片按钮回调版
 
-当前阶段先做：
+P12-A 已完成并已通过实机验收：
+- discovery 搜索成功可返回候选结果卡片
+- “加入监控第 N 个”文本纳管链路未被破坏
+- 卡片发送失败可降级文本
 
-P11-D：monitor 管理动作（pause / resume / delete）最小闭环
+本轮 P12-B 只做：
 
-开始任何开发前，先阅读：
+在 P12-A 候选结果卡片中增加“加入监控”按钮，并把按钮回调接到现有 add-from-candidates 链路。
 
-- docs/p11/p11-project-plan.md
-- docs/p11/P11-agent-prompt.md
-- docs/p11/p11-boss-demo-sop.md
-- docs/p11/p11-acceptance-checklist.md
+开始任何开发前，必须先阅读：
+
+- docs/p12/p12-project-plan.md
+- docs/p12/P12-agent-prompt.md
+- docs/p12/p12-boss-demo-sop.md
+- docs/p12/p12-acceptance-checklist.md
+
+当前禁止：
+
+- 不做监控对象管理卡片
+- 不做 pause / resume / delete 按钮
+- 不做分页
+- 不做表单
+- 不做 PostgreSQL
+- 不新增业务动作
+- 不重写 discovery 主链
+- 不重写 add-from-candidates 主链
+- 不破坏“加入监控第 N 个”文本方式
