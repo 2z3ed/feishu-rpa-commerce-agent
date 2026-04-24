@@ -15,6 +15,8 @@ def _normalize_target(item: dict) -> dict | None:
         return None
     name = str(item.get("name") or item.get("product_name") or item.get("title") or "未命名对象")
     status = str(item.get("status") or ("active" if item.get("is_active", True) else "inactive")).strip().lower()
+    if status in {"deleted", "archived"}:
+        return None
     if status not in {"active", "inactive"}:
         status = "active"
     url = str(item.get("url") or item.get("product_url") or "").strip()
@@ -121,6 +123,16 @@ def build_monitor_targets_card(
                                 "target_id": target["target_id"],
                                 "source": "monitor_list_card",
                             },
+                        },
+                        {
+                            "tag": "button",
+                            "type": "danger",
+                            "text": {"tag": "plain_text", "content": "删除监控"},
+                            "value": {
+                                "action": "delete_monitor_target_request",
+                                "target_id": target["target_id"],
+                                "source": "monitor_list_card",
+                            },
                         }
                     ],
                 }
@@ -166,4 +178,58 @@ def build_monitor_targets_card(
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": "当前监控对象"}},
         "elements": elements,
+    }
+
+
+def build_monitor_target_delete_confirm_card(*, target: dict) -> dict:
+    normalized = _normalize_target(target)
+    if normalized is None:
+        raise ValueError("无效的监控对象，无法生成删除确认卡片")
+    url_line = normalized["url"] if normalized["url"] else "-"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {"title": {"tag": "plain_text", "content": "确认删除监控对象"}},
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "\n".join(
+                        [
+                            f"**对象名称：{normalized['name']}**",
+                            f"- 对象ID：{normalized['target_id']}",
+                            f"- URL：{url_line}",
+                            f"- 当前状态：{normalized['status']}",
+                            "",
+                            "⚠️ 删除后，该对象将不再进入监控列表。",
+                        ]
+                    ),
+                },
+            },
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "type": "danger",
+                        "text": {"tag": "plain_text", "content": "确认删除"},
+                        "value": {
+                            "action": "delete_monitor_target_confirm",
+                            "target_id": normalized["target_id"],
+                            "source": "delete_confirm_card",
+                        },
+                    },
+                    {
+                        "tag": "button",
+                        "type": "default",
+                        "text": {"tag": "plain_text", "content": "取消"},
+                        "value": {
+                            "action": "delete_monitor_target_cancel",
+                            "target_id": normalized["target_id"],
+                            "source": "delete_confirm_card",
+                        },
+                    },
+                ],
+            },
+        ],
     }

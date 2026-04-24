@@ -68,6 +68,20 @@ class BServiceClient:
     def delete_monitor_target(self, target_id: int | str) -> dict[str, Any]:
         return self._delete_envelope_data(f"/internal/monitor/{int(target_id)}")
 
+    def delete_monitor_target_raw_response(self, target_id: int | str) -> dict[str, Any]:
+        path = f"/internal/monitor/{int(target_id)}"
+        try:
+            response = self._client.request(method="DELETE", url=path)
+        except httpx.HTTPError as exc:
+            raise BServiceError(f"B 服务不可达，请确认 {self.base_url} 已启动：{exc}") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise BServiceError("B 服务返回了无法解析的 JSON 响应") from exc
+        if not isinstance(payload, dict):
+            raise BServiceError("B 服务返回格式错误：不是 Envelope 对象")
+        return payload
+
     def _get_envelope_data(self, path: str) -> dict[str, Any]:
         return self._request_envelope_data(method="GET", path=path)
 

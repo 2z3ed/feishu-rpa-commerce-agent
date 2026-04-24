@@ -3,6 +3,7 @@ import time
 import json
 import sys
 import re
+from typing import Any
 
 try:
     import lark_oapi as lark
@@ -22,10 +23,38 @@ from app.db.session import SessionLocal
 from app.db.models import TaskRecord
 from app.graph.nodes.execute_action import execute_action, _load_latest_discovery_context
 from app.clients.b_service_client import BServiceClient
-from app.services.feishu.cards.monitor_targets import build_monitor_targets_card
+from app.services.feishu.cards.monitor_targets import (
+    build_monitor_target_delete_confirm_card,
+    build_monitor_targets_card,
+)
 
 
 class FeishuLongConnListener:
+    @staticmethod
+    def _extract_monitor_targets_list(targets_data: dict[str, Any]) -> list[dict]:
+        targets = targets_data.get("targets")
+        if isinstance(targets, list):
+            return [item for item in targets if isinstance(item, dict)]
+        items = targets_data.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _find_target_in_list(targets: list[dict], target_id: int) -> tuple[bool, str]:
+        for item in targets:
+            raw_id = item.get("target_id")
+            if raw_id in (None, ""):
+                raw_id = item.get("id") or item.get("product_id")
+            try:
+                if int(raw_id) != int(target_id):
+                    continue
+            except Exception:
+                continue
+            status = str(item.get("status") or "").strip().lower() or "unknown"
+            return True, status
+        return False, "missing"
+
     def __init__(self):
         self._client = None
         self._running = False
@@ -425,7 +454,13 @@ class FeishuLongConnListener:
             target_id = int(value.get("target_id"))
         except Exception as exc:
             raise ValueError("payload 缺少有效 target_id") from exc
-        if action_name not in {"pause_monitor_target", "resume_monitor_target"}:
+        if action_name not in {
+            "pause_monitor_target",
+            "resume_monitor_target",
+            "delete_monitor_target_request",
+            "delete_monitor_target_confirm",
+            "delete_monitor_target_cancel",
+        }:
             raise ValueError("不支持的管理动作")
         return action_name, target_id
 
@@ -491,7 +526,15 @@ class FeishuLongConnListener:
                 chat_id,
                 open_id,
             )
-            if action_name not in {"add_from_candidate", "pause_monitor_target", "resume_monitor_target", "monitor_targets_next_page"}:
+            if action_name not in {
+                "add_from_candidate",
+                "pause_monitor_target",
+                "resume_monitor_target",
+                "delete_monitor_target_request",
+                "delete_monitor_target_confirm",
+                "delete_monitor_target_cancel",
+                "monitor_targets_next_page",
+            }:
                 logger.info("Ignore unsupported card action: %s", action_name)
                 return
 
@@ -535,17 +578,93 @@ class FeishuLongConnListener:
                     query,
                     result.get("status"),
                 )
-            elif action_name in {"pause_monitor_target", "resume_monitor_target"}:
+            elif action_name in {
+                "pause_monitor_target",
+                "resume_monitor_target",
+                "delete_monitor_target_request",
+                "delete_monitor_target_confirm",
+                "delete_monitor_target_cancel",
+            }:
                 action_name, target_id = self._parse_manage_monitor_payload(value)
                 b_client = BServiceClient()
                 if action_name == "pause_monitor_target":
                     b_client.pause_monitor_target(target_id)
                     result_text = f"已暂停监控。\n- 对象ID：{target_id}\n- 状态：inactive"
-                else:
+                elif action_name == "resume_monitor_target":
                     b_client.resume_monitor_target(target_id)
                     result_text = f"已恢复监控。\n- 对象ID：{target_id}\n- 状态：active"
+                elif action_name == "delete_monitor_target_request":
+                    targets_data = b_client.get_monitor_targets()
+                    targets = self._extract_monitor_targets_list(targets_data)
+                    selected = None
+                    for item in targets:
+                        raw_id = item.get("target_id")
+                        if raw_id in (None, ""):
+                            raw_id = item.get("id") or item.get("product_id")
+                        try:
+                            if int(raw_id) == target_id:
+                                selected = item
+                                break
+                        except Exception:
+                            continue
+                    if selected is None:
+                        raise ValueError(f"未找到对象ID={target_id} 的监控对象")
+
+                    card = build_monitor_target_delete_confirm_card(target=selected)
+                    send_ok = False
+                    if chat_id:
+                        send_ok = feishu_client.send_interactive_message(
+                            receive_id=chat_id,
+                            card=card,
+                            receive_id_type="chat_id",
+                        )
+                    elif open_id:
+                        send_ok = feishu_client.send_interactive_message(
+                            receive_id=open_id,
+                            card=card,
+                            receive_id_type="open_id",
+                        )
+                    if send_ok:
+                        logger.info(
+                            "=== P12-F DELETE REQUEST CARD SENT === target_id=%s open_message_id=%s",
+                            target_id,
+                            open_message_id,
+                        )
+                        return
+                    result_text = (
+                        "删除确认卡片发送失败，请稍后重试。\n"
+                        f"- 对象ID：{target_id}"
+                    )
+                elif action_name == "delete_monitor_target_confirm":
+                    logger.info("=== P12 DELETE CONFIRM START === target_id=%s", target_id)
+                    delete_raw_response = b_client.delete_monitor_target_raw_response(target_id)
+                    logger.info(
+                        "=== P12 DELETE B RESPONSE === target_id=%s response=%s",
+                        target_id,
+                        json.dumps(delete_raw_response, ensure_ascii=False),
+                    )
+                    logger.info("=== P12 DELETE VERIFY START === target_id=%s", target_id)
+                    targets_data = b_client.get_monitor_targets()
+                    targets = self._extract_monitor_targets_list(targets_data)
+                    exists, status = self._find_target_in_list(targets, target_id)
+                    logger.info(
+                        "=== P12 DELETE VERIFY RESULT === exists=%s status=%s target_id=%s",
+                        str(exists).lower(),
+                        status,
+                        target_id,
+                    )
+                    if exists:
+                        result_text = (
+                            "删除未确认，请稍后重试或检查服务状态。\n"
+                            f"- 对象ID：{target_id}\n"
+                            f"- 当前状态：{status}"
+                        )
+                    else:
+                        result_text = f"已删除监控对象。\n- 对象ID：{target_id}"
+                else:
+                    result_text = f"已取消删除。\n- 对象ID：{target_id}\n对象仍保留在监控列表。"
                 logger.info(
-                    "=== P12-C MONITOR MANAGE SUCCESS === action=%s target_id=%s open_message_id=%s",
+                    "=== P12-CF MONITOR MANAGE SUCCESS === action=%s target_id=%s open_message_id=%s",
                     action_name,
                     target_id,
                     open_message_id,
@@ -554,9 +673,7 @@ class FeishuLongConnListener:
                 page, limit = self._parse_monitor_targets_next_page_payload(value)
                 b_client = BServiceClient()
                 targets_data = b_client.get_monitor_targets()
-                targets = targets_data.get("targets")
-                if not isinstance(targets, list):
-                    targets = targets_data.get("items") if isinstance(targets_data.get("items"), list) else []
+                targets = self._extract_monitor_targets_list(targets_data)
                 total = len(targets)
                 start = (page - 1) * limit
                 if start >= total:
@@ -619,7 +736,13 @@ class FeishuLongConnListener:
             else:
                 feishu_client.send_text_message(receive_id=reply_target_id, text=result_text, receive_id_type="open_id")
         except Exception as e:
-            if action_name in {"pause_monitor_target", "resume_monitor_target"}:
+            if action_name in {
+                "pause_monitor_target",
+                "resume_monitor_target",
+                "delete_monitor_target_request",
+                "delete_monitor_target_confirm",
+                "delete_monitor_target_cancel",
+            }:
                 error_text = f"未能完成监控操作。\n原因：{str(e)}"
             elif action_name == "monitor_targets_next_page":
                 error_text = f"未能加载更多监控对象。\n原因：{str(e)}"

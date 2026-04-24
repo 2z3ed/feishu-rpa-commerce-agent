@@ -1,10 +1,10 @@
-# P12-E Agent 开发提示词
+# P12-F Agent 开发提示词
 
 你现在接手的是 feishu-rpa-commerce-agent 项目。
 
 当前唯一主线是：
 
-P12-E：飞书卡片交互层收口与演示稳定版
+P12-F：监控对象删除二次确认版
 
 ## 一、当前现实
 
@@ -29,11 +29,18 @@ P12-D 已完成：
 - 超过 5 个监控对象时支持“查看更多”
 - 下一页仍保留暂停 / 恢复按钮
 
-本轮不是做新功能。
+P12-E 已完成：
+
+- P12 卡片交互层收口
+- 演示路径统一
+- 回归脚本固化
+- 删除、批量、搜索过滤、排序明确后移
+
+本轮不是做批量管理，也不是做搜索过滤。
 
 本轮只做：
 
-P12 卡片交互层收口、演示稳定、文档统一、回归命令固化。
+监控对象删除二次确认。
 
 ## 二、开始前必须先读
 
@@ -41,90 +48,174 @@ P12 卡片交互层收口、演示稳定、文档统一、回归命令固化。
 2. docs/p12/P12-agent-prompt.md
 3. docs/p12/p12-boss-demo-sop.md
 4. docs/p12/p12-acceptance-checklist.md
-5. README.md
-6. AGENTS.md
+5. docs/p12/p12-closure-summary.md
+6. README.md
+7. AGENTS.md
 
-如果文件不存在或不是 P12-E 口径，先停止并回报。
+如果这些文件不存在，或者不是 P12-F 口径，先停止并回报，不要自行编造阶段目标。
 
-## 三、本轮允许做
+## 三、本轮第一步：先锚定 B 是否已有删除能力
 
-允许：
+你必须先检查：
 
-1. 更新 README P12 阶段说明
-2. 更新 docs/p12 四份约束文件为 P12-E 收口口径
-3. 新增 P12 收口摘要文档
-4. 新增 P12 回归检查脚本
-5. 统一老板可读错误提示
-6. 补少量测试
-7. 清理不必要的临时日志
+- app/clients/b_service_client.py
+- app/graph/nodes/execute_action.py
+- 当前 B 相关接口约定
+- tests 中是否已有 delete/remove/archive monitor target 能力
 
-## 四、本轮禁止做
+如果 B 没有删除能力：
+
+不要硬造 A 侧假删除。
+
+必须先回报：
+
+```text
+当前 B 未提供 monitor target 删除能力，P12-F 不能完整落地。
+```
+
+如果 B 已有删除能力，才继续实现完整 P12-F。
+
+## 四、本轮唯一目标
+
+在监控对象管理卡片中增加：
+
+```text
+删除监控
+```
+
+但点击后不能直接删除。
+
+必须先进入二次确认：
+
+- 确认删除
+- 取消
+
+只有点击“确认删除”后，才允许调用 B 删除能力。
+
+## 五、本轮允许做
+
+只允许做：
+
+1. 在管理卡片增加“删除监控”按钮
+2. 点击后发送删除确认卡片
+3. 确认卡片展示对象名称、ID、URL、状态、风险提示
+4. 确认删除后调用 B 删除能力
+5. 取消后不调用 B
+6. 成功 / 失败 / 取消都返回老板可读文本
+7. 保留暂停 / 恢复
+8. 保留查看更多
+9. 补最小测试
+
+## 六、本轮禁止做
 
 禁止：
 
-- 不做删除按钮
+- 不做点击即删除
+- 不做批量删除
 - 不做批量管理
 - 不做搜索过滤
 - 不做排序
 - 不做 PostgreSQL
-- 不新增业务动作
-- 不重写 P12-A / B / C / D
-- 不破坏已有卡片交互链路
-- 不继续做 P12-F / G / H
+- 不做权限系统
+- 不做复杂回收站
+- 不做多级审批
+- 不新增其他业务动作
+- 不重写 P12-A / B / C / D / E
+- 不破坏暂停 / 恢复
+- 不破坏查看更多
+- 不破坏加入监控
 
-## 五、建议产物
+## 七、建议实现位置
 
-建议新增：
+优先查看：
+
+- app/services/feishu/cards/monitor_targets.py
+- app/services/feishu/longconn.py
+- app/services/feishu/client.py
+- app/clients/b_service_client.py
+- app/graph/nodes/execute_action.py
+- tests/test_p12_c_monitor_card.py
+- tests/test_p12_d_monitor_pagination.py
+
+建议新增或扩展：
 
 ```text
-docs/p12/p12-closure-summary.md
-scripts/p12_regression_check.sh
+tests/test_p12_f_delete_confirm.py
 ```
 
-收口文档至少写清：
+## 八、最小 payload
 
-- P12-A 做了什么
-- P12-B 做了什么
-- P12-C 做了什么
-- P12-D 做了什么
-- 当前老板演示路径
-- 当前测试命令
-- 当前已知后移项
-- 下一阶段建议
+删除入口：
 
-回归脚本至少包含：
+```json
+{
+  "action": "delete_monitor_target_request",
+  "target_id": 7,
+  "source": "monitor_list_card"
+}
+```
+
+确认删除：
+
+```json
+{
+  "action": "delete_monitor_target_confirm",
+  "target_id": 7,
+  "source": "delete_confirm_card"
+}
+```
+
+取消：
+
+```json
+{
+  "action": "delete_monitor_target_cancel",
+  "target_id": 7,
+  "source": "delete_confirm_card"
+}
+```
+
+## 九、测试要求
+
+至少覆盖：
+
+1. 管理卡片出现删除监控按钮
+2. 删除按钮不会直接调用删除能力
+3. 点击删除按钮返回确认卡片
+4. 确认卡片包含对象名称、ID、URL、状态、风险提示
+5. 点击取消不调用删除能力
+6. 点击确认才调用删除能力
+7. 删除成功后返回老板可读文本
+8. P12-C 暂停 / 恢复仍可用
+9. P12-D 查看更多仍可用
+10. 不包含批量删除
+
+必须跑：
 
 ```bash
 pytest -q tests/test_p10_b_query_integration.py
 pytest -q tests/test_p12_b_card_action.py
 pytest -q tests/test_p12_c_monitor_card.py
 pytest -q tests/test_p12_d_monitor_pagination.py
-```
-
-完成后建议按以下顺序执行：
-
-```bash
-pytest -q tests/test_p10_b_query_integration.py
-pytest -q tests/test_p12_b_card_action.py
-pytest -q tests/test_p12_c_monitor_card.py
-pytest -q tests/test_p12_d_monitor_pagination.py
+pytest -q tests/test_p12_f_delete_confirm.py
 bash scripts/p12_regression_check.sh
-git status --short
-git diff --stat
 ```
 
-## 六、完成后回报格式
+## 十、完成后回报格式
 
 A. 先读了哪些文件  
-B. P12-E 收口范围确认  
-C. 本轮实际执行了哪些命令  
-D. 改了哪些文件  
-E. 新增了哪些收口文档或脚本  
-F. P12-A/B/C/D 回归测试结果  
-G. 是否混入删除 / 批量 / 搜索过滤 / 排序  
-H. 是否可以进入最终收口提交  
+B. B 是否已有 monitor target 删除能力  
+C. 如果没有，是否已停止业务实现并回报  
+D. 如果有，本轮实际执行了哪些命令  
+E. 改了哪些文件  
+F. 删除二次确认链路如何设计  
+G. 是否确认“删除按钮不会直接删除”  
+H. 是否保留暂停 / 恢复 / 查看更多  
+I. 测试结果  
+J. 是否可以进入飞书实机验收  
 
 只允许使用简体中文。
 
 不要只给计划。
-不要继续做 P12-F。
+不要只贴 diff。
+不要继续做 P12-G。

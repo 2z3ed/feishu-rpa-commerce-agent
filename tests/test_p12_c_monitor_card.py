@@ -33,20 +33,24 @@ def test_monitor_targets_card_contains_required_fields_and_buttons():
     assert "对象ID：8" in text_blob
     assert "状态：inactive" in text_blob
     assert "https://b.example" in text_blob
-    assert "删除" not in text_blob
-
     actions = [elem for elem in card["elements"] if elem.get("tag") == "action"]
     assert len(actions) == 2
-    first = actions[0]["actions"][0]
-    second = actions[1]["actions"][0]
-    assert first["text"]["content"] == "暂停监控"
-    assert first["value"]["action"] == "pause_monitor_target"
-    assert first["value"]["target_id"] == 7
-    assert first["value"]["source"] == "monitor_list_card"
-    assert second["text"]["content"] == "恢复监控"
-    assert second["value"]["action"] == "resume_monitor_target"
-    assert second["value"]["target_id"] == 8
-    assert second["value"]["source"] == "monitor_list_card"
+    first_buttons = actions[0]["actions"]
+    second_buttons = actions[1]["actions"]
+    assert first_buttons[0]["text"]["content"] == "暂停监控"
+    assert first_buttons[0]["value"]["action"] == "pause_monitor_target"
+    assert first_buttons[0]["value"]["target_id"] == 7
+    assert first_buttons[0]["value"]["source"] == "monitor_list_card"
+    assert first_buttons[1]["text"]["content"] == "删除监控"
+    assert first_buttons[1]["value"]["action"] == "delete_monitor_target_request"
+    assert first_buttons[1]["value"]["target_id"] == 7
+    assert second_buttons[0]["text"]["content"] == "恢复监控"
+    assert second_buttons[0]["value"]["action"] == "resume_monitor_target"
+    assert second_buttons[0]["value"]["target_id"] == 8
+    assert second_buttons[0]["value"]["source"] == "monitor_list_card"
+    assert second_buttons[1]["text"]["content"] == "删除监控"
+    assert second_buttons[1]["value"]["action"] == "delete_monitor_target_request"
+    assert second_buttons[1]["value"]["target_id"] == 8
 
 
 def test_card_action_handler_pause_and_resume(monkeypatch):

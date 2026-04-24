@@ -34,8 +34,6 @@ def test_monitor_targets_card_page1_shows_more_button_and_next_payload():
     assert "商品1" in text_blob
     assert "商品5" in text_blob
     assert "商品6" not in text_blob
-    assert "删除" not in text_blob
-
     more_action = None
     for elem in card["elements"]:
         if elem.get("tag") != "action":
@@ -66,8 +64,9 @@ def test_monitor_targets_card_page2_no_more_button_and_keep_manage_buttons():
     for elem in card["elements"]:
         if elem.get("tag") != "action":
             continue
-        value = ((elem.get("actions") or [{}])[0]).get("value") or {}
-        action_values.append(value.get("action"))
+        for button in elem.get("actions") or []:
+            value = button.get("value") or {}
+            action_values.append(value.get("action"))
     assert "pause_monitor_target" in action_values
     assert "resume_monitor_target" in action_values
     assert "monitor_targets_next_page" not in action_values
