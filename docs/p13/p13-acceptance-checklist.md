@@ -1,93 +1,115 @@
-# P13-C 验收检查表
+# P13-D 验收检查表
 
 ## 一、范围检查
 
-- [ ] 当前阶段为 P13-C
+- [ ] 当前阶段为 P13-D
 - [ ] 当前是 A/B 双仓协同开发
-- [ ] 未做阈值规则
-- [ ] 未做价格低于多少提醒
 - [ ] 未做定时任务
 - [ ] 未做主动推送
-- [ ] 未做订阅系统
-- [ ] 未做邮件 / 短信
-- [ ] 未做价格曲线图
-- [ ] 未做图表卡片
-- [ ] 未做库存 / SKU
-- [ ] 未混入 P13-D/E/F
+- [ ] 未做阈值告警
+- [ ] 未做失败重试队列
+- [ ] 未做复杂调度
+- [ ] 未做价格图表
+- [ ] 未做后台管理页面
+- [ ] 未做 run 列表页面
+- [ ] 未混入 P13-E/F/G
 
-## 二、B 项目刷新结构检查
+## 二、B 项目 run 存储检查
 
-- [ ] refresh-prices 返回 total
-- [ ] refresh-prices 返回 refreshed
-- [ ] refresh-prices 返回 changed
-- [ ] refresh-prices 返回 failed
-- [ ] refresh-prices 返回 items 或 changed_items
-- [ ] item 包含 product_id
-- [ ] item 包含 product_name
-- [ ] item 包含 current_price
-- [ ] item 包含 last_price
-- [ ] item 包含 price_delta
-- [ ] item 包含 price_delta_percent
-- [ ] item 包含 price_changed
-- [ ] item 包含 price_source
-- [ ] item 包含 last_checked_at
+- [ ] 有 price_refresh_runs 结构
+- [ ] 有 price_refresh_run_items 结构
+- [ ] refresh-prices 每次生成 run_id
+- [ ] run 保存 status
+- [ ] run 保存 total
+- [ ] run 保存 refreshed
+- [ ] run 保存 changed
+- [ ] run 保存 failed
+- [ ] run 保存 started_at
+- [ ] run 保存 finished_at
+- [ ] run 保存 duration_ms
+- [ ] run 保存 trigger_source
 
-## 三、B 项目回归检查
+## 三、B 项目 item 明细检查
 
-- [ ] refresh-price 单对象不退化
-- [ ] refresh-prices 批量不退化
-- [ ] price snapshot 写入不退化
-- [ ] price-history 查询不退化
-- [ ] pause / resume / delete 不退化
+- [ ] item 保存 run_id
+- [ ] item 保存 product_id
+- [ ] item 保存 product_name
+- [ ] item 保存 status
+- [ ] item 保存 current_price
+- [ ] item 保存 last_price
+- [ ] item 保存 price_delta
+- [ ] item 保存 price_delta_percent
+- [ ] item 保存 price_changed
+- [ ] item 保存 price_source
+- [ ] item 支持 error_message
+- [ ] item 保存 checked_at
 
-## 四、A 项目文案检查
+## 四、B 项目 API 检查
 
-- [ ] 有变化时显示“本轮价格变化：X 个”
-- [ ] 有变化时展示前 5 条
-- [ ] 每条展示名称
-- [ ] 每条展示当前价
-- [ ] 每条展示上次价
-- [ ] 每条展示涨跌金额
-- [ ] 每条展示涨跌百分比
-- [ ] 超过 5 条时提示剩余数量
-- [ ] 无变化时显示“本轮暂无价格变化”
-- [ ] 显示失败数
-- [ ] B 服务错误时老板可读
+- [ ] refresh-prices 返回 run_id
+- [ ] refresh-prices 返回 status
+- [ ] refresh-prices 保留 P13-C changed_items / items
+- [ ] GET /internal/monitor/price-refresh-runs/{run_id} 可用
+- [ ] run_id 不存在时返回 envelope error
+- [ ] run detail 返回 summary
+- [ ] run detail 返回 items
 
-## 五、A 项目回归检查
+## 五、A 项目命令检查
 
-- [ ] “刷新监控价格”仍可用
-- [ ] “查看价格历史 7”仍可用
-- [ ] “查看第 N 个价格历史”仍可用
-- [ ] “看看当前监控对象”仍可用
-- [ ] P12 卡片按钮不退化
+- [ ] 刷新监控价格回复展示 run_id
+- [ ] 支持“查看刷新结果 PRR-xxx”
+- [ ] 支持“查看价格刷新批次 PRR-xxx”
+- [ ] 支持“查看刷新批次 PRR-xxx”
+- [ ] A 调 B run detail API
+- [ ] run 不存在时返回老板可读错误
 
-## 六、测试检查
+## 六、A 项目展示检查
+
+- [ ] run detail 显示 run_id
+- [ ] run detail 显示 status
+- [ ] run detail 显示 total
+- [ ] run detail 显示 refreshed
+- [ ] run detail 显示 changed
+- [ ] run detail 显示 failed
+- [ ] run detail 显示 duration_ms
+- [ ] run detail 展示变化对象
+- [ ] 无变化对象时提示清楚
+
+## 七、回归检查
+
+- [ ] P13-A 刷新价格不退化
+- [ ] P13-B 价格历史不退化
+- [ ] P13-C 变化摘要不退化
+- [ ] P12-B 候选加入监控通过
+- [ ] P12-C 暂停 / 恢复通过
+- [ ] P12-D 查看更多通过
+- [ ] P12-F 删除二次确认通过
+
+## 八、测试检查
 
 B 项目：
 
 - [ ] pytest -q tests/test_monitor_management_api.py 通过
-- [ ] P13-C 新增 B 测试通过
+- [ ] P13-D 新增 B 测试通过
 
 A 项目：
 
 - [ ] pytest -q tests/test_p10_b_query_integration.py 通过
 - [ ] pytest -q tests/test_p13_a_monitor_price_card.py 通过
-- [ ] P13-B 测试通过
-- [ ] P13-C 新增 A 测试通过
+- [ ] P13-D 新增 A 测试通过
 - [ ] bash scripts/p12_regression_check.sh 通过
 
-## 七、实机验收
+## 九、实机验收
 
-- [ ] 飞书“刷新监控价格”显示变化摘要
-- [ ] 有变化时展示变化对象
-- [ ] 无变化时展示暂无变化
-- [ ] 超过 5 条时截断展示
-- [ ] 价格历史回归通过
-- [ ] 管理卡片回归通过
+- [ ] 飞书“刷新监控价格”返回 run_id
+- [ ] 飞书“查看刷新结果 run_id”成功
+- [ ] run detail summary 正确
+- [ ] run detail 变化对象正确
+- [ ] 不存在 run_id 返回可读错误
+- [ ] P13-B 回归通过
 - [ ] P12 回归通过
 
-## 八、提交检查
+## 十、提交检查
 
 - [ ] B 项目先提交
 - [ ] A 项目后提交
@@ -96,14 +118,15 @@ A 项目：
 - [ ] 两仓 git status 已复核
 - [ ] 两仓 git diff --stat 已复核
 
-## 九、通过结论
+## 十一、通过结论
 
-P13-C 通过条件：
+P13-D 通过条件：
 
-- [ ] B refresh-prices 结构增强通过
-- [ ] A 变化提醒摘要通过
-- [ ] P13-A 不退化
-- [ ] P13-B 不退化
+- [ ] B refresh run 留痕通过
+- [ ] B run detail API 通过
+- [ ] A 展示 run_id 通过
+- [ ] A run 查询通过
+- [ ] P13-A/B/C 回归通过
 - [ ] P12 回归通过
 - [ ] A/B 分仓测试通过
 - [ ] A/B 分仓提交

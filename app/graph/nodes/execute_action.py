@@ -584,6 +584,27 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "b_service_client"
             state["action_executed_detail"] = result
 
+        elif intent_code == "ecom_watch.price_refresh_run_detail":
+            run_id = str(slots.get("run_id") or "").strip().upper()
+            if not run_id:
+                raise ValueError("缺少 run_id")
+            b_client = BServiceClient()
+            result = b_client.get_price_refresh_run(run_id)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_price_refresh_run_detail_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.price_refresh_run_detail"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_price_refresh_run_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13d_price_refresh_run_query_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
         elif intent_code == "ecom_watch.manage_monitor_target":
             raw_index = slots.get("index")
             try:
@@ -1277,10 +1298,13 @@ def format_b_monitor_targets_result(data: dict) -> str:
 
 
 def format_b_refresh_monitor_prices_result(data: dict) -> str:
+    run_id = str(data.get("run_id") or "").strip()
+    status = str(data.get("status") or "unknown").strip()
     total = int(data.get("total") or 0)
     refreshed = int(data.get("refreshed") or 0)
     changed = int(data.get("changed") or 0)
     failed = int(data.get("failed") or 0)
+    duration_ms = int(data.get("duration_ms") or 0)
     items = data.get("changed_items")
     if not isinstance(items, list):
         raw_items = data.get("items")
@@ -1290,14 +1314,21 @@ def format_b_refresh_monitor_prices_result(data: dict) -> str:
             items = []
 
     if changed <= 0:
-        return "\n".join(
+        lines = ["监控价格已刷新。"]
+        if run_id:
+            lines.append(f"刷新批次：{run_id}")
+        lines.extend(
             [
-                "监控价格已刷新。",
+                f"状态：{status}",
                 "本轮暂无价格变化。",
+                f"总对象数：{total}",
                 f"成功刷新：{refreshed}",
                 f"失败：{failed}",
             ]
         )
+        if duration_ms > 0:
+            lines.append(f"耗时：{duration_ms}ms")
+        return "\n".join(lines)
 
     def _format_delta_line(item: dict) -> str:
         delta_raw = item.get("price_delta")
@@ -1326,7 +1357,21 @@ def format_b_refresh_monitor_prices_result(data: dict) -> str:
 
     display_items = items[:5]
     unchanged = max(total - changed, 0)
-    lines = ["监控价格已刷新。", "", f"本轮价格变化：{changed} 个"]
+    lines = ["监控价格已刷新。"]
+    if run_id:
+        lines.append(f"刷新批次：{run_id}")
+    lines.extend(
+        [
+            f"状态：{status}",
+            f"总对象数：{total}",
+            f"成功刷新：{refreshed}",
+            f"本轮价格变化：{changed}",
+            f"失败：{failed}",
+        ]
+    )
+    if duration_ms > 0:
+        lines.append(f"耗时：{duration_ms}ms")
+    lines.extend(["", "变化对象："])
     for idx, item in enumerate(display_items, start=1):
         name = str(item.get("product_name") or f"对象#{item.get('product_id') or idx}")
         current_price = item.get("current_price")
@@ -1344,7 +1389,71 @@ def format_b_refresh_monitor_prices_result(data: dict) -> str:
         lines.append(f"还有 {changed - len(display_items)} 个价格变化对象未展示。")
         lines.append("")
     lines.append(f"未变化：{unchanged} 个")
-    lines.append(f"刷新失败：{failed} 个")
+    return "\n".join(lines)
+
+
+def format_b_price_refresh_run_detail_result(data: dict) -> str:
+    run_id = str(data.get("run_id") or "").strip()
+    status = str(data.get("status") or "unknown").strip()
+    total = int(data.get("total") or 0)
+    refreshed = int(data.get("refreshed") or 0)
+    changed = int(data.get("changed") or 0)
+    failed = int(data.get("failed") or 0)
+    duration_ms = int(data.get("duration_ms") or 0)
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    changed_items = [item for item in items if isinstance(item, dict) and item.get("price_changed") is True]
+
+    lines = [
+        f"价格刷新结果：{run_id or '-'}",
+        f"状态：{status}",
+        f"总对象数：{total}",
+        f"成功刷新：{refreshed}",
+        f"价格变化：{changed}",
+        f"失败：{failed}",
+    ]
+    if duration_ms > 0:
+        lines.append(f"耗时：{duration_ms}ms")
+    if not changed_items:
+        lines.extend(["", "变化对象：", "无"])
+        return "\n".join(lines)
+
+    def _format_delta_line(item: dict) -> str:
+        delta_raw = item.get("price_delta")
+        percent_raw = item.get("price_delta_percent")
+        try:
+            delta = float(delta_raw)
+        except Exception:
+            delta = 0.0
+        if delta > 0:
+            trend = "上涨"
+        elif delta < 0:
+            trend = "下降"
+        else:
+            trend = "持平"
+        abs_delta = abs(delta)
+        if percent_raw is None:
+            return f"{trend} {abs_delta:g}"
+        try:
+            percent = float(percent_raw)
+            return f"{trend} {abs_delta:g}（{percent:+.2f}%）"
+        except Exception:
+            return f"{trend} {abs_delta:g}"
+
+    lines.extend(["", "变化对象："])
+    for idx, item in enumerate(changed_items[:5], start=1):
+        name = str(item.get("product_name") or f"对象#{item.get('product_id') or idx}")
+        current_price = item.get("current_price")
+        last_price = item.get("last_price")
+        lines.extend(
+            [
+                f"{idx}. {name}",
+                f"   当前价：{current_price if current_price is not None else '-'}",
+                f"   上次价：{last_price if last_price is not None else '-'}",
+                f"   变化：{_format_delta_line(item)}",
+            ]
+        )
+    if len(changed_items) > 5:
+        lines.append(f"... 还有 {len(changed_items) - 5} 个变化对象未展示")
     return "\n".join(lines)
 
 

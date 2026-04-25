@@ -44,6 +44,10 @@ class BServiceClient:
             f"/internal/monitor/{int(target_id)}/price-history?limit={safe_limit}"
         )
 
+    def get_price_refresh_run(self, run_id: str) -> dict[str, Any]:
+        safe_run_id = str(run_id).strip()
+        return self._get_envelope_data(f"/internal/monitor/price-refresh-runs/{safe_run_id}")
+
     def get_product_detail(self, product_id: int) -> dict[str, Any]:
         return self._get_envelope_data(f"/internal/products/{product_id}/detail")
 

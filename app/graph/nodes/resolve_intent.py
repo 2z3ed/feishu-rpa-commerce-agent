@@ -45,6 +45,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_price_history(normalized_text)
 
+    # P13-D: query monitor refresh run detail by run_id.
+    if not intent_code:
+        intent_code, slots = try_match_b_price_refresh_run(normalized_text)
+
     # P11-D: manage monitor target (pause / resume / delete) by index.
     if not intent_code:
         intent_code, slots = try_match_b_manage_monitor_target(normalized_text)
@@ -152,6 +156,17 @@ def try_match_b_price_history(text: str) -> tuple[str | None, dict]:
         raw_id = int(match.group(1))
         return "ecom_watch.monitor_price_history", {"target_id": raw_id, "query_mode": "target_id", "ambiguous_input": True}
     return None, {}
+
+
+def try_match_b_price_refresh_run(text: str) -> tuple[str | None, dict]:
+    pattern = (
+        r"^(查看刷新结果|查看价格刷新批次|查看刷新批次)\s*"
+        r"(PRR-\d{8}-[A-Z0-9]{4,})$"
+    )
+    match = re.search(pattern, text, re.IGNORECASE)
+    if not match:
+        return None, {}
+    return "ecom_watch.price_refresh_run_detail", {"run_id": match.group(2).upper()}
 
 
 def try_match_b_manage_monitor_target(text: str) -> tuple[str | None, dict]:

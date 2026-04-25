@@ -48,6 +48,17 @@ def test_resolve_monitor_price_history_intent():
     assert out_4["slots"]["query_mode"] == "list_index"
 
 
+def test_resolve_price_refresh_run_detail_intent():
+    for text in (
+        "查看刷新结果 PRR-20260425-ABCD",
+        "查看价格刷新批次 prr-20260425-ab12",
+        "查看刷新批次 PRR-20260425-XYZ9",
+    ):
+        out = resolve_intent({"normalized_text": text})
+        assert out["intent_code"] == "ecom_watch.price_refresh_run_detail"
+        assert out["slots"]["run_id"].startswith("PRR-20260425-")
+
+
 def test_resolve_manage_monitor_target_allows_index_over_ten():
     state = {"normalized_text": "恢复监控第 12 个"}
     out = resolve_intent(state)
@@ -185,10 +196,13 @@ def test_build_monitor_targets_context_keeps_price_fields():
 def test_execute_refresh_monitor_prices_success(monkeypatch):
     def _fake_refresh(self):
         return {
+            "run_id": "PRR-20260425-ABCD",
+            "status": "succeeded",
             "total": 8,
             "refreshed": 6,
             "changed": 2,
             "failed": 0,
+            "duration_ms": 1200,
             "changed_items": [
                 {
                     "product_id": 7,
@@ -220,22 +234,28 @@ def test_execute_refresh_monitor_prices_success(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "succeeded"
     assert "监控价格已刷新" in result["result_summary"]
-    assert "本轮价格变化：2 个" in result["result_summary"]
+    assert "刷新批次：PRR-20260425-ABCD" in result["result_summary"]
+    assert "状态：succeeded" in result["result_summary"]
+    assert "本轮价格变化：2" in result["result_summary"]
+    assert "耗时：1200ms" in result["result_summary"]
     assert "1. 商品A" in result["result_summary"]
     assert "变化：上涨 5（+2.63%）" in result["result_summary"]
     assert "2. 商品B" in result["result_summary"]
     assert "变化：下降 20（-10.00%）" in result["result_summary"]
     assert "未变化：6 个" in result["result_summary"]
-    assert "刷新失败：0 个" in result["result_summary"]
+    assert "失败：0" in result["result_summary"]
 
 
 def test_execute_refresh_monitor_prices_no_changes(monkeypatch):
     def _fake_refresh(self):
         return {
+            "run_id": "PRR-20260425-ABCD",
+            "status": "succeeded",
             "total": 10,
             "refreshed": 10,
             "changed": 0,
             "failed": 1,
+            "duration_ms": 888,
             "items": [],
             "changed_items": [],
         }
@@ -245,8 +265,10 @@ def test_execute_refresh_monitor_prices_no_changes(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "succeeded"
     assert "本轮暂无价格变化" in result["result_summary"]
+    assert "刷新批次：PRR-20260425-ABCD" in result["result_summary"]
     assert "成功刷新：10" in result["result_summary"]
     assert "失败：1" in result["result_summary"]
+    assert "耗时：888ms" in result["result_summary"]
 
 
 def test_execute_refresh_monitor_prices_show_top_five(monkeypatch):
@@ -267,10 +289,13 @@ def test_execute_refresh_monitor_prices_show_top_five(monkeypatch):
                 }
             )
         return {
+            "run_id": "PRR-20260425-ABCD",
+            "status": "succeeded",
             "total": 9,
             "refreshed": 9,
             "changed": 7,
             "failed": 0,
+            "duration_ms": 1000,
             "changed_items": changed_items,
         }
 
@@ -283,6 +308,83 @@ def test_execute_refresh_monitor_prices_show_top_five(monkeypatch):
     assert "6. 商品6" not in result["result_summary"]
     assert "还有 2 个价格变化对象未展示。" in result["result_summary"]
     assert "未变化：2 个" in result["result_summary"]
+
+
+def test_execute_price_refresh_run_detail_success(monkeypatch):
+    def _fake_get_run(self, run_id: str):
+        assert run_id == "PRR-20260425-ABCD"
+        return {
+            "run_id": run_id,
+            "status": "succeeded",
+            "total": 10,
+            "refreshed": 10,
+            "changed": 3,
+            "failed": 0,
+            "duration_ms": 1200,
+            "items": [
+                {
+                    "product_id": 1,
+                    "product_name": "商品A",
+                    "current_price": 199,
+                    "last_price": 209,
+                    "price_delta": -10,
+                    "price_delta_percent": -4.78,
+                    "price_changed": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_price_refresh_run", _fake_get_run)
+    state = {
+        "intent_code": "ecom_watch.price_refresh_run_detail",
+        "slots": {"run_id": "PRR-20260425-ABCD"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "价格刷新结果：PRR-20260425-ABCD" in result["result_summary"]
+    assert "价格变化：3" in result["result_summary"]
+    assert "变化：下降 10（-4.78%）" in result["result_summary"]
+
+
+def test_execute_price_refresh_run_detail_no_changes(monkeypatch):
+    def _fake_get_run(self, run_id: str):
+        return {
+            "run_id": run_id,
+            "status": "succeeded",
+            "total": 5,
+            "refreshed": 5,
+            "changed": 0,
+            "failed": 0,
+            "duration_ms": 300,
+            "items": [],
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_price_refresh_run", _fake_get_run)
+    state = {
+        "intent_code": "ecom_watch.price_refresh_run_detail",
+        "slots": {"run_id": "PRR-20260425-AAAA"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "变化对象：" in result["result_summary"]
+    assert "\n无" in result["result_summary"]
+
+
+def test_execute_price_refresh_run_detail_not_found(monkeypatch):
+    def _fake_get_run(self, run_id: str):
+        raise BServiceError("B 服务错误：refresh run not found (code=HTTP_404, status=404)")
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_price_refresh_run", _fake_get_run)
+    state = {
+        "intent_code": "ecom_watch.price_refresh_run_detail",
+        "slots": {"run_id": "PRR-20260425-ZZZZ"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "查询失败" in result["result_summary"]
 
 
 def test_execute_monitor_price_history_success(monkeypatch):
