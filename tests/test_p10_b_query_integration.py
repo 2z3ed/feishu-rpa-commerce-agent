@@ -189,6 +189,30 @@ def test_execute_refresh_monitor_prices_success(monkeypatch):
             "refreshed": 6,
             "changed": 2,
             "failed": 0,
+            "changed_items": [
+                {
+                    "product_id": 7,
+                    "product_name": "商品A",
+                    "current_price": 195,
+                    "last_price": 190,
+                    "price_delta": 5,
+                    "price_delta_percent": 2.63,
+                    "price_changed": True,
+                    "price_source": "mock_price",
+                    "last_checked_at": "2026-04-25T18:30:00",
+                },
+                {
+                    "product_id": 8,
+                    "product_name": "商品B",
+                    "current_price": 180,
+                    "last_price": 200,
+                    "price_delta": -20,
+                    "price_delta_percent": -10.0,
+                    "price_changed": True,
+                    "price_source": "mock_price",
+                    "last_checked_at": "2026-04-25T18:31:00",
+                },
+            ],
         }
 
     monkeypatch.setattr("app.clients.b_service_client.BServiceClient.refresh_monitor_prices", _fake_refresh)
@@ -196,10 +220,69 @@ def test_execute_refresh_monitor_prices_success(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "succeeded"
     assert "监控价格已刷新" in result["result_summary"]
-    assert "总对象数：8" in result["result_summary"]
-    assert "成功刷新：6" in result["result_summary"]
-    assert "价格变化：2" in result["result_summary"]
-    assert "失败：0" in result["result_summary"]
+    assert "本轮价格变化：2 个" in result["result_summary"]
+    assert "1. 商品A" in result["result_summary"]
+    assert "变化：上涨 5（+2.63%）" in result["result_summary"]
+    assert "2. 商品B" in result["result_summary"]
+    assert "变化：下降 20（-10.00%）" in result["result_summary"]
+    assert "未变化：6 个" in result["result_summary"]
+    assert "刷新失败：0 个" in result["result_summary"]
+
+
+def test_execute_refresh_monitor_prices_no_changes(monkeypatch):
+    def _fake_refresh(self):
+        return {
+            "total": 10,
+            "refreshed": 10,
+            "changed": 0,
+            "failed": 1,
+            "items": [],
+            "changed_items": [],
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.refresh_monitor_prices", _fake_refresh)
+    state = {"intent_code": "ecom_watch.refresh_monitor_prices", "slots": {}, "status": "processing"}
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "本轮暂无价格变化" in result["result_summary"]
+    assert "成功刷新：10" in result["result_summary"]
+    assert "失败：1" in result["result_summary"]
+
+
+def test_execute_refresh_monitor_prices_show_top_five(monkeypatch):
+    def _fake_refresh(self):
+        changed_items = []
+        for i in range(1, 8):
+            changed_items.append(
+                {
+                    "product_id": i,
+                    "product_name": f"商品{i}",
+                    "current_price": 100 + i,
+                    "last_price": 99 + i,
+                    "price_delta": 1,
+                    "price_delta_percent": 1.0,
+                    "price_changed": True,
+                    "price_source": "mock_price",
+                    "last_checked_at": "2026-04-25T18:30:00",
+                }
+            )
+        return {
+            "total": 9,
+            "refreshed": 9,
+            "changed": 7,
+            "failed": 0,
+            "changed_items": changed_items,
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.refresh_monitor_prices", _fake_refresh)
+    state = {"intent_code": "ecom_watch.refresh_monitor_prices", "slots": {}, "status": "processing"}
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "1. 商品1" in result["result_summary"]
+    assert "5. 商品5" in result["result_summary"]
+    assert "6. 商品6" not in result["result_summary"]
+    assert "还有 2 个价格变化对象未展示。" in result["result_summary"]
+    assert "未变化：2 个" in result["result_summary"]
 
 
 def test_execute_monitor_price_history_success(monkeypatch):

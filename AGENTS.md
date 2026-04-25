@@ -658,49 +658,55 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-A：监控对象价格数据最小闭环版
+P13-C：价格变化提醒最小闭环版
 
 本轮是 A/B 双仓协同开发。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、老板交互层、卡片展示层。
+定位：飞书入口层、消息编排层、老板交互层、提醒文案展示层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格字段、价格刷新、价格计算。
+定位：业务服务层，负责 monitor target、价格刷新、价格变化计算、价格历史记录、刷新结果汇总。
 
-当前固定原则：
+P13-A 已完成：
+- B 侧 monitor target 已有价格字段
+- B 侧支持刷新价格
+- A 侧支持“刷新监控价格”
+- A 侧管理卡片可展示价格字段
+
+P13-B 已完成：
+- B 侧支持 price snapshots 历史记录
+- B 侧支持 price-history 查询 API
+- A 侧支持价格历史查询命令
+- 对象ID / 第 N 个语义已统一
+
+本轮 P13-C 只做：
+
+手动刷新价格后的价格变化提醒摘要。
+
+固定原则：
 
 - A 可以调用 B
 - A 不吞 B
-- A 不把 B 的价格业务逻辑搬进自己仓库
-- B 先实现价格数据能力
-- A 再接飞书命令与卡片展示
+- A 不重新计算价格变化
+- A 只消费 B 返回的刷新结果
+- B 负责刷新、计算、历史留痕、变化汇总
 - 两个仓库分别测试、分别清点、分别提交
 - 提交顺序：先 B，后 A
 
-本轮 P13-A 只做：
-
-监控对象价格数据最小闭环。
-
-目标链路：
-
-监控对象
-→ 刷新价格
-→ 保存 current_price / last_price
-→ 计算 price_delta / price_delta_percent
-→ 飞书管理卡片展示价格信息
-
 当前禁止：
 
+- 不做阈值规则
+- 不做价格低于多少提醒
 - 不做定时任务
-- 不做复杂爬虫
-- 不做代理池
-- 不做反爬
-- 不做历史价格曲线
-- 不做价格告警
-- 不做库存 / SKU 规格矩阵
-- 不做批量采集治理
-- 不做复杂数据库迁移
+- 不做主动推送
+- 不做订阅系统
+- 不做邮件 / 短信通知
+- 不做价格曲线图
+- 不做复杂趋势分析
+- 不做库存 / SKU
+- 不破坏 P13-A 刷新价格闭环
+- 不破坏 P13-B 价格历史
 - 不破坏 P12 卡片交互层
 
 开始任何开发前，必须先阅读：
@@ -708,25 +714,31 @@ B 项目：Ecom-Watch-Agent-Agent
 A 项目：
 - AGENTS.md
 - README.md
-- docs/p12/p12-closure-summary.md
-- app/services/feishu/cards/monitor_targets.py
-- app/services/feishu/longconn.py
-- app/tasks/ingress_tasks.py
+- docs/p13/p13-project-plan.md
+- docs/p13/P13-agent-prompt.md
 - app/clients/b_service_client.py
+- app/graph/nodes/resolve_intent.py
+- app/graph/nodes/execute_action.py
+- tests/test_p13_a_monitor_price_card.py
+- tests/test_p10_b_query_integration.py
 
 B 项目：
 - README 或项目主说明
-- monitor target 相关 schema / service / API / tests
-- app/services/monitor_management_service.py
+- app/models/product.py
+- app/models/price_snapshot.py
 - app/schemas/monitor_management.py
+- app/services/monitor_management_service.py
+- app/api/routes_internal_monitor.py
 - tests/test_monitor_management_api.py
 
-P13-A 最小通过标准：
+P13-C 最小通过标准：
 
-- B monitor target 有价格字段
-- B 能刷新至少一个对象价格
-- 第二次刷新能把 current_price 转为 last_price
-- B 能计算 price_delta / price_delta_percent
-- A 飞书管理卡片能展示价格信息
-- 未采集对象显示“暂未采集”
-- P12-B/C/D/F 不退化
+- B 的 refresh-prices 返回 changed count
+- B 的 refresh-prices 返回 changed items 列表
+- A 的“刷新监控价格”回复显示本轮价格变化摘要
+- 有变化时展示前 5 条变化对象
+- 无变化时显示“本轮暂无价格变化”
+- 失败数正常展示
+- P13-A 刷新价格不退化
+- P13-B 价格历史不退化
+- P12 交互不退化

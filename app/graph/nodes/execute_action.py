@@ -1281,15 +1281,71 @@ def format_b_refresh_monitor_prices_result(data: dict) -> str:
     refreshed = int(data.get("refreshed") or 0)
     changed = int(data.get("changed") or 0)
     failed = int(data.get("failed") or 0)
-    return "\n".join(
-        [
-            "监控价格已刷新。",
-            f"- 总对象数：{total}",
-            f"- 成功刷新：{refreshed}",
-            f"- 价格变化：{changed}",
-            f"- 失败：{failed}",
-        ]
-    )
+    items = data.get("changed_items")
+    if not isinstance(items, list):
+        raw_items = data.get("items")
+        if isinstance(raw_items, list):
+            items = [item for item in raw_items if isinstance(item, dict) and item.get("price_changed") is True]
+        else:
+            items = []
+
+    if changed <= 0:
+        return "\n".join(
+            [
+                "监控价格已刷新。",
+                "本轮暂无价格变化。",
+                f"成功刷新：{refreshed}",
+                f"失败：{failed}",
+            ]
+        )
+
+    def _format_delta_line(item: dict) -> str:
+        delta_raw = item.get("price_delta")
+        percent_raw = item.get("price_delta_percent")
+        try:
+            delta = float(delta_raw)
+        except Exception:
+            delta = 0.0
+
+        if delta > 0:
+            trend = "上涨"
+        elif delta < 0:
+            trend = "下降"
+        else:
+            trend = "持平"
+
+        abs_delta = abs(delta)
+        if percent_raw is None:
+            return f"{trend} {abs_delta:g}"
+
+        try:
+            percent = float(percent_raw)
+            return f"{trend} {abs_delta:g}（{percent:+.2f}%）"
+        except Exception:
+            return f"{trend} {abs_delta:g}"
+
+    display_items = items[:5]
+    unchanged = max(total - changed, 0)
+    lines = ["监控价格已刷新。", "", f"本轮价格变化：{changed} 个"]
+    for idx, item in enumerate(display_items, start=1):
+        name = str(item.get("product_name") or f"对象#{item.get('product_id') or idx}")
+        current_price = item.get("current_price")
+        last_price = item.get("last_price")
+        lines.extend(
+            [
+                f"{idx}. {name}",
+                f"   当前价：{current_price if current_price is not None else '-'}",
+                f"   上次价：{last_price if last_price is not None else '-'}",
+                f"   变化：{_format_delta_line(item)}",
+                "",
+            ]
+        )
+    if changed > len(display_items):
+        lines.append(f"还有 {changed - len(display_items)} 个价格变化对象未展示。")
+        lines.append("")
+    lines.append(f"未变化：{unchanged} 个")
+    lines.append(f"刷新失败：{failed} 个")
+    return "\n".join(lines)
 
 
 def format_b_monitor_price_history_result(

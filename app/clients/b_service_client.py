@@ -38,6 +38,12 @@ class BServiceClient:
     def refresh_monitor_prices(self) -> dict[str, Any]:
         return self._post_envelope_data("/internal/monitor/refresh-prices", {})
 
+    def get_monitor_target_price_history(self, target_id: int | str, limit: int = 5) -> dict[str, Any]:
+        safe_limit = int(limit) if int(limit) > 0 else 5
+        return self._get_envelope_data(
+            f"/internal/monitor/{int(target_id)}/price-history?limit={safe_limit}"
+        )
+
     def get_product_detail(self, product_id: int) -> dict[str, Any]:
         return self._get_envelope_data(f"/internal/products/{product_id}/detail")
 

@@ -1,40 +1,46 @@
-# P13-A 开发主线文档
+# P13-C 开发主线文档
 
 ## 阶段名称
 
-P13-A：监控对象价格数据最小闭环版
+P13-C：价格变化提醒最小闭环版
 
 ## 一、阶段背景
 
-P12 已经完成飞书卡片交互层：
+P13-A 已完成价格数据最小闭环：
 
-- 搜索商品返回候选卡片
-- 候选卡片支持加入监控
-- 监控对象管理卡片支持暂停 / 恢复
-- 超过 5 个对象支持查看更多
-- 监控对象支持删除二次确认
-- P12 已完成收口与回归脚本
+- monitor target 有 current_price / last_price
+- 可以刷新价格
+- 可以计算 price_delta / price_delta_percent
+- 飞书管理卡片可以展示价格字段
 
-现在继续深挖 P12 的搜索过滤、批量管理并不是最高优先级。
+P13-B 已完成价格历史留痕：
 
-下一阶段应进入 P13：监控数据闭环。
+- 刷新价格时追加 price snapshot
+- 可以查询最近价格历史
+- 飞书可以查看某个监控对象的价格历史
+- 对象ID与“第 N 个”语义已统一
 
-P13-A 的目标是让 monitor target 从“URL 管理对象”升级为“有价格数据的监控对象”。
+现在下一步不是做定时任务，也不是做阈值规则，而是先把“手动刷新价格后的变化结果”讲清楚。
+
+P13-C 只做：
+
+刷新监控价格后，如果有对象价格变化，飞书返回老板可读的价格变化摘要。
 
 ## 二、本轮唯一目标
 
 只做：
 
-监控对象价格数据最小闭环。
+手动刷新后的价格变化提醒摘要。
 
 目标链路：
 
 ```text
-监控对象
-→ 手动刷新价格
-→ 保存 current_price / last_price
-→ 计算 price_delta / price_delta_percent
-→ 飞书管理卡片展示价格信息
+刷新监控价格
+→ B 刷新 active 监控对象价格
+→ B 写入 price snapshot
+→ B 返回本轮刷新汇总与变化对象
+→ A 格式化价格变化提醒
+→ 飞书返回老板可读摘要
 ```
 
 ## 三、A/B 双仓分工
@@ -43,314 +49,237 @@ P13-A 的目标是让 monitor target 从“URL 管理对象”升级为“有价
 
 职责：
 
-- 飞书入口
-- 文本命令解析
-- 调用 B 项目价格刷新接口
-- 飞书管理卡片展示价格字段
-- 老板可读结果文案
-- P12 卡片回归
+- 接收“刷新监控价格”
+- 调用 B 的 refresh-prices
+- 读取 B 返回的 changed items
+- 生成老板可读提醒文案
+- 保留 P13-A / P13-B / P12 回归
 
 A 不允许：
 
-- 不直接实现价格采集业务
-- 不直接保存价格数据
-- 不绕过 B 写 monitor target
-- 不把 B 的业务逻辑搬进 A
+- 不重新计算价格变化
+- 不直接写 price snapshots
+- 不保存价格历史
+- 不做阈值规则
+- 不做主动推送
 
 ### B 项目：Ecom-Watch-Agent-Agent
 
 职责：
 
-- monitor target 价格字段
-- 价格刷新能力
-- 价格变化计算
-- monitor target list 返回价格字段
-- 价格相关 API / service / tests
+- 刷新价格
+- 计算 price_changed / price_delta / price_delta_percent
+- 写入 price snapshots
+- 返回 refreshed / changed / failed / items 等汇总信息
 
-B 是本轮核心改动仓库。
+B 是本轮结果结构增强的核心。
 
-## 四、本轮第一步：字段锚定
+## 四、B refresh-prices 返回结构要求
 
-开发前必须先确认 B 当前 monitor target 结构。
-
-预计已有字段：
-
-```text
-product_id
-product_name
-product_url
-source_type
-is_active
-status
-created_at
-updated_at
-```
-
-P13-A 最小新增字段建议：
-
-```text
-current_price
-last_price
-price_delta
-price_delta_percent
-price_changed
-last_checked_at
-price_source
-```
-
-字段说明：
-
-- current_price：当前价格
-- last_price：上一次价格
-- price_delta：当前价格 - 上次价格
-- price_delta_percent：价格变化百分比
-- price_changed：价格是否变化
-- last_checked_at：最后检测时间
-- price_source：价格来源，如 mock_price / manual_probe / html_extract_preview
-
-## 五、价格刷新能力
-
-P13-A 不做复杂爬虫。
-
-本轮允许三种最小来源：
-
-```text
-mock_price
-manual_probe
-html_extract_preview
-```
-
-推荐先实现 mock_price 或 manual_probe，证明闭环：
-
-```text
-读取价格
-→ 保存价格
-→ 比较变化
-→ 返回结果
-```
-
-建议 B 提供最小接口：
-
-```text
-POST /internal/monitor/{id}/refresh-price
-POST /internal/monitor/refresh-prices
-```
-
-如果只做一个，优先做单对象：
-
-```text
-POST /internal/monitor/{id}/refresh-price
-```
-
-再做批量 active 刷新：
+当前 B 已有：
 
 ```text
 POST /internal/monitor/refresh-prices
 ```
 
-但注意：
+P13-C 需要增强它的返回结果。
 
-批量刷新只是遍历 active 对象，不做复杂采集治理。
+建议返回：
 
-## 六、A 项目飞书入口
-
-P13-A 建议新增文本命令：
-
-```text
-刷新监控价格
-刷新监控对象价格
-刷新价格
+```json
+{
+  "total": 10,
+  "refreshed": 10,
+  "changed": 3,
+  "failed": 0,
+  "items": [
+    {
+      "product_id": 7,
+      "product_name": "Hush Home® 深眠重力被",
+      "product_url": "https://...",
+      "current_price": 195,
+      "last_price": 190,
+      "price_delta": 5,
+      "price_delta_percent": 2.63,
+      "price_changed": true,
+      "price_source": "mock_price",
+      "last_checked_at": "2026-04-25T..."
+    }
+  ]
+}
 ```
 
-行为：
+说明：
 
-```text
-A 收到命令
-→ 调 B 刷新 active 监控对象价格
-→ B 返回刷新结果
-→ A 回复老板可读汇总
-```
+- items 可以返回本轮所有刷新对象，或至少返回变化对象
+- A 只展示 price_changed=true 的前 5 条
+- failed 必须可展示
+- 不改变 P13-A 价格计算规则
+- 不破坏 P13-B snapshot 写入
 
-汇总示例：
+## 五、A 刷新结果提醒文案
+
+有变化时：
 
 ```text
 监控价格已刷新。
-- 总对象数：8
-- 成功刷新：6
-- 价格变化：2
-- 失败：0
+
+本轮价格变化：3 个
+1. Hush Home® 深眠重力被
+   当前价：195
+   上次价：190
+   变化：上涨 5（+2.63%）
+
+2. XXX
+   当前价：180
+   上次价：200
+   变化：下降 20（-10.00%）
+
+未变化：7 个
+刷新失败：0 个
 ```
 
-## 七、A 项目管理卡片展示
-
-“看看当前监控对象”卡片中增加价格字段。
-
-如果有价格：
+无变化时：
 
 ```text
-当前价格：199
-上次价格：209
-变化：下降 10（-4.78%）
-最后检测：2026-04-25 17:30
-来源：mock_price
+监控价格已刷新。
+本轮暂无价格变化。
+成功刷新：10 个
+失败：0 个
 ```
 
-如果没有价格：
+变化超过 5 条时：
 
 ```text
-当前价格：暂未采集
+还有 3 个价格变化对象未展示。
 ```
 
-注意：
+## 六、本轮允许做
 
-- 不改 P12 的按钮主链
-- 暂停 / 恢复 / 删除 / 查看更多都不能退化
-- 价格展示只是附加信息
+B 项目允许：
 
-## 八、本轮允许做
+1. 增强 refresh-prices 返回结构
+2. 返回 changed count
+3. 返回 changed items 或 items 列表
+4. 保留 price snapshot 写入
+5. 增加 B 测试
 
-允许：
+A 项目允许：
 
-1. B 增加 monitor target 价格字段
-2. B 增加最小价格刷新 service
-3. B 增加价格变化计算
-4. B list 接口返回价格字段
-5. B 增加最小价格刷新测试
-6. A 增加刷新价格文本命令
-7. A 增加 BServiceClient 调用
-8. A 管理卡片展示价格字段
-9. A 保留 P12 按钮能力
-10. A/B 分别补测试
+1. 升级“刷新监控价格”回复文案
+2. 展示本轮变化摘要
+3. 变化对象最多展示前 5 条
+4. 无变化时展示“本轮暂无价格变化”
+5. 增加 A 测试
+6. 更新 README / docs / AGENTS
 
-## 九、本轮禁止做
+## 七、本轮禁止做
 
 禁止：
 
+- 不做阈值规则
+- 不做价格低于多少提醒
 - 不做定时任务
-- 不做复杂爬虫
-- 不做代理池
-- 不做反爬
-- 不做历史价格表
-- 不做价格曲线
-- 不做价格告警
-- 不做库存监控
-- 不做 SKU 规格矩阵
-- 不做复杂数据库迁移
-- 不做批量采集治理
-- 不重写 P12 卡片交互层
-- 不破坏 P12-B/C/D/F
+- 不做主动推送
+- 不做订阅系统
+- 不做邮件 / 短信通知
+- 不做价格曲线图
+- 不做图表卡片
+- 不做复杂趋势分析
+- 不做库存 / SKU
+- 不做复杂采集治理
+- 不新增数据表
+- 不破坏 P13-A 刷新价格
+- 不破坏 P13-B 价格历史
+- 不破坏 P12 卡片交互层
 
-## 十、推荐开发顺序
+## 八、推荐开发顺序
 
-### P13-A.0：B 侧字段锚定
+### P13-C.0：B refresh-prices 结构锚定
 
-先检查 B 当前 schema / service / tests。
+先检查当前 B 的 refresh-prices 返回结构。
 
-输出当前字段情况，不要直接盲改。
+确认当前是否已经有：
 
-### P13-A.1：B 侧价格字段与 list 返回
+- total
+- refreshed
+- changed
+- failed
+- items
 
-让 monitor target 返回价格字段。
+### P13-C.1：B 返回变化对象
 
-未采集时字段允许为 null。
+增强 refresh-prices 返回：
 
-### P13-A.2：B 侧最小刷新价格
+- changed count
+- failed count
+- items 列表
+- 每个 item 包含名称、价格、变化值、变化百分比、来源、检测时间
 
-实现：
+不要改变价格计算规则。
 
-```text
-refresh_monitor_target_price(target_id)
-```
+不要删除 snapshot 写入。
 
-至少支持 mock_price。
+### P13-C.2：A 文案格式化
 
-第二次刷新时：
+A 的“刷新监控价格”回复从简单汇总升级为变化摘要。
 
-```text
-last_price = old current_price
-current_price = new price
-```
+A 不重新计算变化，只读取 B 返回结果。
 
-并计算：
+### P13-C.3：限制展示数量
 
-```text
-price_delta
-price_delta_percent
-price_changed
-last_checked_at
-```
+A 默认只展示前 5 条变化对象。
 
-### P13-A.3：B 侧刷新接口
-
-优先实现：
+超过 5 条时提示：
 
 ```text
-POST /internal/monitor/{id}/refresh-price
+还有 X 个价格变化对象未展示。
 ```
 
-如果时间允许，再实现：
-
-```text
-POST /internal/monitor/refresh-prices
-```
-
-### P13-A.4：A 侧接入刷新命令
-
-新增文本入口：
-
-```text
-刷新监控价格
-```
-
-A 调 B，返回老板可读汇总。
-
-### P13-A.5：A 侧管理卡片展示价格
-
-“看看当前监控对象”卡片展示价格字段。
-
-### P13-A.6：回归
+### P13-C.4：回归
 
 必须回归：
 
+- P13-A 管理卡片价格字段
+- P13-B 价格历史查询
 - P12-B 候选加入监控
 - P12-C 暂停 / 恢复
 - P12-D 查看更多
 - P12-F 删除二次确认
 
-## 十一、通过标准
+## 九、通过标准
 
-P13-A 通过条件：
+P13-C 通过条件：
 
-- B monitor target 有价格字段
-- B list 返回价格字段
-- B 至少一个对象能刷新 current_price
-- 第二次刷新能记录 last_price
-- B 能计算 price_delta / price_delta_percent
-- A 能通过飞书命令触发刷新
-- A 管理卡片展示价格信息
-- 未采集对象显示“暂未采集”
-- P12-B/C/D/F 不退化
+- B refresh-prices 返回 changed count
+- B refresh-prices 返回变化对象信息
+- A 刷新监控价格回复显示变化摘要
+- 有变化时展示前 5 条变化
+- 无变化时展示暂无变化
+- 失败数正常展示
+- P13-A 不退化
+- P13-B 不退化
+- P12 不退化
 - A/B 分别测试通过
 - A/B 分别提交
 
-## 十二、提交边界
+## 十、提交边界
 
 B 项目允许提交：
 
-- schema / service / API / tests 中与价格字段、刷新价格有关的最小改动
+- refresh-prices 返回结构增强
+- schema / service / API / tests 相关最小改动
 
 A 项目允许提交：
 
-- BServiceClient 调用
-- 飞书命令解析 / 执行
-- 管理卡片展示
-- P13-A 测试
-- docs / README / AGENTS 相关阶段说明
+- BServiceClient 适配
+- execute_action 刷新价格文案增强
+- P13-C 测试
+- docs / README / AGENTS 阶段说明
 
 禁止混入：
 
-- P13-B 历史价格表
-- P13-C 价格告警
-- P13-D 库存 / SKU
-- P13-E 定时采集
+- P13-D 定时刷新
+- P13-E 价格阈值提醒
+- P13-F 采集失败治理
 - 无关重构
