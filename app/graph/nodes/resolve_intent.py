@@ -41,6 +41,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_refresh_monitor_prices(normalized_text)
 
+    # P13-B: query monitor target price history.
+    if not intent_code:
+        intent_code, slots = try_match_b_price_history(normalized_text)
+
     # P11-D: manage monitor target (pause / resume / delete) by index.
     if not intent_code:
         intent_code, slots = try_match_b_manage_monitor_target(normalized_text)
@@ -114,6 +118,42 @@ def try_match_b_refresh_monitor_prices(text: str) -> tuple[str | None, dict]:
     return None, {}
 
 
+def try_match_b_price_history(text: str) -> tuple[str | None, dict]:
+    explicit_id_patterns = (
+        r"^查看对象ID\s*(\d+)\s*的?价格历史$",
+        r"^查看监控对象ID\s*(\d+)\s*的?价格历史$",
+        r"^查看ID\s*(\d+)\s*价格历史$",
+    )
+    for pattern in explicit_id_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        return "ecom_watch.monitor_price_history", {"target_id": int(match.group(1)), "query_mode": "target_id"}
+
+    index_patterns = (
+        r"^查看第\s*(\d+)\s*个价格历史$",
+        r"^查看第\s*(\d+)\s*个监控对象价格历史$",
+    )
+    for pattern in index_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        return "ecom_watch.monitor_price_history", {"list_index": int(match.group(1)), "query_mode": "list_index"}
+
+    implied_id_patterns = (
+        r"^查看价格历史\s*(\d+)$",
+        r"^查看历史价格\s*(\d+)$",
+        r"^查看监控对象\s*(\d+)\s*价格历史$",
+    )
+    for pattern in implied_id_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        raw_id = int(match.group(1))
+        return "ecom_watch.monitor_price_history", {"target_id": raw_id, "query_mode": "target_id", "ambiguous_input": True}
+    return None, {}
+
+
 def try_match_b_manage_monitor_target(text: str) -> tuple[str | None, dict]:
     def _parse_zh_ordinal_index(raw: str) -> int | None:
         """
@@ -127,7 +167,7 @@ def try_match_b_manage_monitor_target(text: str) -> tuple[str | None, dict]:
         s = re.sub(r"\s*个$", "", s)
         if s.isdigit():
             n = int(s)
-            return n if 1 <= n <= 10 else None
+            return n if n > 0 else None
         mapping = {
             "一": 1,
             "二": 2,

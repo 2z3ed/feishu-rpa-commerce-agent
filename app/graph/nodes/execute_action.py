@@ -490,6 +490,100 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "b_service_client"
             state["action_executed_detail"] = result
 
+        elif intent_code == "ecom_watch.monitor_price_history":
+            query_mode = str(slots.get("query_mode") or "target_id").strip().lower()
+            selected_index = None
+            target_id = None
+            if query_mode == "list_index":
+                raw_index = slots.get("list_index")
+                try:
+                    selected_index = int(raw_index)
+                except Exception:
+                    selected_index = 0
+                if selected_index <= 0:
+                    state["error_message"] = "编号必须是大于 0 的整数"
+                    state["status"] = "failed"
+                    state["result_summary"] = "查询失败：编号必须是大于 0 的整数"
+                    state["platform"] = "ecom_watch"
+                    state["provider_id"] = "ecom_watch"
+                    state["capability"] = "monitor.price_history"
+                    state["readiness_status"] = "ready"
+                    state["endpoint_profile"] = "b_internal_monitor_price_history_v1"
+                    state["session_injection_mode"] = "none"
+                    state["execution_backend"] = "httpx_b_service"
+                    state["selected_backend"] = "httpx_b_service"
+                    state["final_backend"] = "httpx_b_service"
+                    state["backend_selection_reason"] = "p13b_price_history_invalid_index"
+                    state["client_profile"] = "b_service_client"
+                    return state
+                context = _load_latest_monitor_targets_context(
+                    chat_id=str(state.get("source_chat_id") or ""),
+                    user_open_id=str(state.get("user_open_id") or ""),
+                )
+                if not context:
+                    state["error_message"] = "未找到最近一次监控列表"
+                    state["status"] = "failed"
+                    state["result_summary"] = "查询失败：未找到最近一次监控列表，请先发送“看看当前监控对象”"
+                    state["platform"] = "ecom_watch"
+                    state["provider_id"] = "ecom_watch"
+                    state["capability"] = "monitor.price_history"
+                    state["readiness_status"] = "ready"
+                    state["endpoint_profile"] = "b_internal_monitor_price_history_v1"
+                    state["session_injection_mode"] = "none"
+                    state["execution_backend"] = "httpx_b_service"
+                    state["selected_backend"] = "httpx_b_service"
+                    state["final_backend"] = "httpx_b_service"
+                    state["backend_selection_reason"] = "p13b_price_history_missing_targets_context"
+                    state["client_profile"] = "b_service_client"
+                    return state
+                targets = context.get("targets") if isinstance(context.get("targets"), list) else []
+                if selected_index > len(targets):
+                    state["error_message"] = f"编号超出范围（当前最多 {len(targets)} 个）"
+                    state["status"] = "failed"
+                    state["result_summary"] = f"查询失败：编号超出范围（当前最多 {len(targets)} 个）"
+                    state["platform"] = "ecom_watch"
+                    state["provider_id"] = "ecom_watch"
+                    state["capability"] = "monitor.price_history"
+                    state["readiness_status"] = "ready"
+                    state["endpoint_profile"] = "b_internal_monitor_price_history_v1"
+                    state["session_injection_mode"] = "none"
+                    state["execution_backend"] = "httpx_b_service"
+                    state["selected_backend"] = "httpx_b_service"
+                    state["final_backend"] = "httpx_b_service"
+                    state["backend_selection_reason"] = "p13b_price_history_out_of_range"
+                    state["client_profile"] = "b_service_client"
+                    return state
+                selected = targets[selected_index - 1] if isinstance(targets[selected_index - 1], dict) else {}
+                target_id = selected.get("target_id")
+                if target_id in (None, ""):
+                    raise ValueError("监控对象缺少 target_id")
+            else:
+                target_id = slots.get("target_id")
+                if target_id is None:
+                    raise ValueError("缺少 target_id")
+            b_client = BServiceClient()
+            result = b_client.get_monitor_target_price_history(int(target_id), limit=5)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_monitor_price_history_result(
+                result,
+                int(target_id),
+                query_mode=query_mode,
+                selected_index=selected_index,
+                ambiguous_input=bool(slots.get("ambiguous_input")),
+            )
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.price_history"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_price_history_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13b_price_history_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
         elif intent_code == "ecom_watch.manage_monitor_target":
             raw_index = slots.get("index")
             try:
@@ -1196,6 +1290,74 @@ def format_b_refresh_monitor_prices_result(data: dict) -> str:
             f"- 失败：{failed}",
         ]
     )
+
+
+def format_b_monitor_price_history_result(
+    data: dict,
+    target_id: int,
+    *,
+    query_mode: str = "target_id",
+    selected_index: int | None = None,
+    ambiguous_input: bool = False,
+) -> str:
+    snapshots = data.get("snapshots")
+    if not isinstance(snapshots, list):
+        snapshots = []
+    if not snapshots:
+        return "该监控对象暂未产生价格历史。\n请先发送：刷新监控价格"
+
+    display_rows = snapshots[:5]
+    first = display_rows[0] if isinstance(display_rows[0], dict) else {}
+    name = str(
+        data.get("product_name")
+        or data.get("name")
+        or first.get("product_name")
+        or first.get("name")
+        or "监控对象"
+    )
+    title = f"价格历史：{name}（对象ID={target_id}）"
+    lines = [title]
+    if query_mode == "list_index" and selected_index is not None:
+        lines.append(f"本次按列表序号查询：第 {selected_index} 个监控对象。")
+    elif ambiguous_input:
+        lines.append(f"本次按对象ID查询：{target_id}。")
+        lines.append(f"如果你想按列表序号查询，请发送：查看第 {target_id} 个价格历史")
+    lines.append("")
+    for idx, item in enumerate(display_rows, start=1):
+        if not isinstance(item, dict):
+            continue
+        checked_at = str(item.get("checked_at") or "-")
+        checked_at = checked_at.replace("T", " ")[:16] if checked_at != "-" else checked_at
+        price = item.get("price")
+        price_line = str(price) if price is not None else "N/A"
+        delta = item.get("price_delta")
+        delta_percent = item.get("price_delta_percent")
+        if delta is None:
+            change_line = "首次记录"
+        else:
+            delta_value = float(delta)
+            if delta_value > 0:
+                trend = "上涨"
+            elif delta_value < 0:
+                trend = "下降"
+            else:
+                trend = "持平"
+            abs_delta = abs(delta_value)
+            if delta_percent is None:
+                change_line = f"{trend} {abs_delta:g}"
+            else:
+                change_line = f"{trend} {abs_delta:g}（{float(delta_percent):+.2f}%）"
+        source = str(item.get("price_source") or "mock_price")
+        lines.extend(
+            [
+                f"{idx}. {checked_at}",
+                f"   当前价：{price_line}",
+                f"   变化：{change_line}",
+                f"   来源：{source}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
 
 
 def format_b_product_detail_result(data: dict, product_id: int) -> str:

@@ -22,6 +22,40 @@ def test_resolve_refresh_monitor_prices_intent():
         assert out["intent_code"] == "ecom_watch.refresh_monitor_prices"
 
 
+def test_resolve_monitor_price_history_intent():
+    state_1 = {"normalized_text": "查看价格历史 7"}
+    out_1 = resolve_intent(state_1)
+    assert out_1["intent_code"] == "ecom_watch.monitor_price_history"
+    assert out_1["slots"]["target_id"] == 7
+    assert out_1["slots"]["query_mode"] == "target_id"
+
+    state_2 = {"normalized_text": "查看历史价格 7"}
+    out_2 = resolve_intent(state_2)
+    assert out_2["intent_code"] == "ecom_watch.monitor_price_history"
+    assert out_2["slots"]["target_id"] == 7
+    assert out_2["slots"]["query_mode"] == "target_id"
+
+    state_3 = {"normalized_text": "查看对象ID 7 的价格历史"}
+    out_3 = resolve_intent(state_3)
+    assert out_3["intent_code"] == "ecom_watch.monitor_price_history"
+    assert out_3["slots"]["target_id"] == 7
+    assert out_3["slots"]["query_mode"] == "target_id"
+
+    state_4 = {"normalized_text": "查看第 7 个价格历史"}
+    out_4 = resolve_intent(state_4)
+    assert out_4["intent_code"] == "ecom_watch.monitor_price_history"
+    assert out_4["slots"]["list_index"] == 7
+    assert out_4["slots"]["query_mode"] == "list_index"
+
+
+def test_resolve_manage_monitor_target_allows_index_over_ten():
+    state = {"normalized_text": "恢复监控第 12 个"}
+    out = resolve_intent(state)
+    assert out["intent_code"] == "ecom_watch.manage_monitor_target"
+    assert out["slots"]["action"] == "resume"
+    assert out["slots"]["index"] == 12
+
+
 def test_resolve_product_detail_intent():
     state = {"normalized_text": "看看商品 123 的详情"}
     out = resolve_intent(state)
@@ -166,6 +200,132 @@ def test_execute_refresh_monitor_prices_success(monkeypatch):
     assert "成功刷新：6" in result["result_summary"]
     assert "价格变化：2" in result["result_summary"]
     assert "失败：0" in result["result_summary"]
+
+
+def test_execute_monitor_price_history_success(monkeypatch):
+    def _fake_price_history(self, target_id: int, limit: int = 5):
+        assert target_id == 7
+        assert limit == 5
+        return {
+            "product_name": "Mock Phone X",
+            "snapshots": [
+                {
+                    "checked_at": "2026-04-25T18:30:00",
+                    "price": 199,
+                    "price_delta": -10,
+                    "price_delta_percent": -4.78,
+                    "price_source": "mock_price",
+                },
+                {
+                    "checked_at": "2026-04-25T18:20:00",
+                    "price": 209,
+                    "price_delta": None,
+                    "price_delta_percent": None,
+                    "price_source": "mock_price",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.get_monitor_target_price_history",
+        _fake_price_history,
+    )
+    state = {
+        "intent_code": "ecom_watch.monitor_price_history",
+        "slots": {"target_id": 7, "query_mode": "target_id", "ambiguous_input": True},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "价格历史：Mock Phone X（对象ID=7）" in result["result_summary"]
+    assert "变化：下降 10（-4.78%）" in result["result_summary"]
+    assert "变化：首次记录" in result["result_summary"]
+    assert "本次按对象ID查询：7。" in result["result_summary"]
+    assert "如果你想按列表序号查询，请发送：查看第 7 个价格历史" in result["result_summary"]
+
+
+def test_execute_monitor_price_history_by_list_index(monkeypatch):
+    def _fake_load_latest_targets_context(*, chat_id: str, user_open_id: str):
+        assert chat_id == "chat-1"
+        assert user_open_id == "user-1"
+        return {
+            "targets": [
+                {"target_id": 5, "name": "A"},
+                {"target_id": 12, "name": "B"},
+                {"target_id": 20, "name": "C"},
+            ]
+        }
+
+    def _fake_price_history(self, target_id: int, limit: int = 5):
+        assert target_id == 12
+        return {
+            "product_name": "Mock Phone X",
+            "snapshots": [
+                {
+                    "checked_at": "2026-04-25T18:30:00",
+                    "price": 199,
+                    "price_delta": -10,
+                    "price_delta_percent": -4.78,
+                    "price_source": "mock_price",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action._load_latest_monitor_targets_context",
+        _fake_load_latest_targets_context,
+    )
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.get_monitor_target_price_history",
+        _fake_price_history,
+    )
+    state = {
+        "intent_code": "ecom_watch.monitor_price_history",
+        "slots": {"list_index": 2, "query_mode": "list_index"},
+        "status": "processing",
+        "source_chat_id": "chat-1",
+        "user_open_id": "user-1",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "对象ID=12" in result["result_summary"]
+    assert "本次按列表序号查询：第 2 个监控对象。" in result["result_summary"]
+
+
+def test_execute_monitor_price_history_empty(monkeypatch):
+    def _fake_price_history(self, target_id: int, limit: int = 5):
+        return {"product_name": "Mock Phone X", "snapshots": []}
+
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.get_monitor_target_price_history",
+        _fake_price_history,
+    )
+    state = {
+        "intent_code": "ecom_watch.monitor_price_history",
+        "slots": {"target_id": 7},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "该监控对象暂未产生价格历史" in result["result_summary"]
+    assert "请先发送：刷新监控价格" in result["result_summary"]
+
+
+def test_execute_monitor_price_history_list_index_out_of_range(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.execute_action._load_latest_monitor_targets_context",
+        lambda **_: {"targets": [{"target_id": 1}]},
+    )
+    state = {
+        "intent_code": "ecom_watch.monitor_price_history",
+        "slots": {"list_index": 7, "query_mode": "list_index"},
+        "status": "processing",
+        "source_chat_id": "chat-1",
+        "user_open_id": "user-1",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "编号超出范围" in result["result_summary"]
 
 
 def test_execute_product_detail_success(monkeypatch):
