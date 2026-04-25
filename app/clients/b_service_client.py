@@ -32,6 +32,12 @@ class BServiceClient:
     def get_monitor_targets(self) -> dict[str, Any]:
         return self._get_envelope_data("/internal/monitor/targets")
 
+    def refresh_monitor_target_price(self, target_id: int | str) -> dict[str, Any]:
+        return self._post_envelope_data(f"/internal/monitor/{int(target_id)}/refresh-price", {})
+
+    def refresh_monitor_prices(self) -> dict[str, Any]:
+        return self._post_envelope_data("/internal/monitor/refresh-prices", {})
+
     def get_product_detail(self, product_id: int) -> dict[str, Any]:
         return self._get_envelope_data(f"/internal/products/{product_id}/detail")
 

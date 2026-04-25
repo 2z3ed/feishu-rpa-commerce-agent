@@ -20,11 +20,25 @@ def _normalize_target(item: dict) -> dict | None:
     if status not in {"active", "inactive"}:
         status = "active"
     url = str(item.get("url") or item.get("product_url") or "").strip()
+    current_price = item.get("current_price")
+    last_price = item.get("last_price")
+    price_delta = item.get("price_delta")
+    price_delta_percent = item.get("price_delta_percent")
+    price_changed = bool(item.get("price_changed", False))
+    last_checked_at = item.get("last_checked_at")
+    price_source = str(item.get("price_source") or "").strip()
     return {
         "target_id": target_id,
         "name": name,
         "status": status,
         "url": url,
+        "current_price": current_price,
+        "last_price": last_price,
+        "price_delta": price_delta,
+        "price_delta_percent": price_delta_percent,
+        "price_changed": price_changed,
+        "last_checked_at": last_checked_at,
+        "price_source": price_source,
     }
 
 
@@ -94,6 +108,36 @@ def build_monitor_targets_card(
             action_name = "pause_monitor_target" if target["status"] == "active" else "resume_monitor_target"
             action_text = "暂停监控" if target["status"] == "active" else "恢复监控"
             url_line = target["url"] if target["url"] else "-"
+            current_price = target.get("current_price")
+            last_price = target.get("last_price")
+            price_delta = target.get("price_delta")
+            price_delta_percent = target.get("price_delta_percent")
+            price_changed = bool(target.get("price_changed", False))
+            last_checked_at = str(target.get("last_checked_at") or "").strip()
+            price_source = str(target.get("price_source") or "").strip()
+
+            if current_price is None:
+                current_price_line = "暂未采集"
+                last_price_line = "暂未采集"
+                change_line = "暂未采集"
+                checked_line = "-"
+                source_line = "-"
+            else:
+                current_price_line = str(current_price)
+                last_price_line = "暂未采集" if last_price is None else str(last_price)
+                if price_delta is None:
+                    change_line = "暂无变化数据"
+                else:
+                    trend = "上涨" if float(price_delta) > 0 else ("下降" if float(price_delta) < 0 else "持平")
+                    if price_delta_percent is None:
+                        change_line = f"{trend} {abs(float(price_delta))}"
+                    else:
+                        change_line = f"{trend} {abs(float(price_delta))}（{float(price_delta_percent):+.2f}%）"
+                checked_line = last_checked_at or "-"
+                source_line = price_source or "mock_price"
+                if not price_changed and price_delta is None:
+                    change_line = "暂无变化数据"
+
             elements.append(
                 {
                     "tag": "div",
@@ -105,6 +149,11 @@ def build_monitor_targets_card(
                                 f"- 对象ID：{target['target_id']}",
                                 f"- 状态：{target['status']}",
                                 f"- URL：{url_line}",
+                                f"- 当前价格：{current_price_line}",
+                                f"- 上次价格：{last_price_line}",
+                                f"- 变化：{change_line}",
+                                f"- 最后检测：{checked_line}",
+                                f"- 来源：{source_line}",
                             ]
                         ),
                     },

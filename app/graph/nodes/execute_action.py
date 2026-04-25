@@ -162,7 +162,19 @@ def _extract_monitor_target_minimal(item: dict) -> dict | None:
     name = str(item.get("name") or item.get("product_name") or item.get("title") or "未命名")
     status = str(item.get("status") or ("active" if item.get("is_active", True) else "inactive"))
     url = str(item.get("url") or item.get("product_url") or "")
-    return {"target_id": int(raw_id), "name": name, "status": status, "url": url}
+    return {
+        "target_id": int(raw_id),
+        "name": name,
+        "status": status,
+        "url": url,
+        "current_price": item.get("current_price"),
+        "last_price": item.get("last_price"),
+        "price_delta": item.get("price_delta"),
+        "price_delta_percent": item.get("price_delta_percent"),
+        "price_changed": bool(item.get("price_changed", False)),
+        "last_checked_at": item.get("last_checked_at"),
+        "price_source": item.get("price_source"),
+    }
 
 
 def _build_monitor_targets_context(*, targets_data: dict) -> dict:
@@ -459,6 +471,24 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p10_query_chain"
             state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.refresh_monitor_prices":
+            b_client = BServiceClient()
+            result = b_client.refresh_monitor_prices()
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_refresh_monitor_prices_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.refresh_prices"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_refresh_prices_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13a_refresh_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
 
         elif intent_code == "ecom_watch.manage_monitor_target":
             raw_index = slots.get("index")
@@ -1150,6 +1180,22 @@ def format_b_monitor_targets_result(data: dict) -> str:
         else:
             lines.append(f"- {idx}. {item}")
     return "\n".join(lines)
+
+
+def format_b_refresh_monitor_prices_result(data: dict) -> str:
+    total = int(data.get("total") or 0)
+    refreshed = int(data.get("refreshed") or 0)
+    changed = int(data.get("changed") or 0)
+    failed = int(data.get("failed") or 0)
+    return "\n".join(
+        [
+            "监控价格已刷新。",
+            f"- 总对象数：{total}",
+            f"- 成功刷新：{refreshed}",
+            f"- 价格变化：{changed}",
+            f"- 失败：{failed}",
+        ]
+    )
 
 
 def format_b_product_detail_result(data: dict, product_id: int) -> str:

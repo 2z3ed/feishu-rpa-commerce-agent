@@ -37,6 +37,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_targets(normalized_text)
 
+    # P13-A: refresh monitor target prices via B service.
+    if not intent_code:
+        intent_code, slots = try_match_b_refresh_monitor_prices(normalized_text)
+
     # P11-D: manage monitor target (pause / resume / delete) by index.
     if not intent_code:
         intent_code, slots = try_match_b_manage_monitor_target(normalized_text)
@@ -100,6 +104,13 @@ def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
     monitor_keywords = ("看看当前监控对象", "当前监控哪些商品", "监控列表")
     if any(keyword in text for keyword in monitor_keywords):
         return "ecom_watch.monitor_targets", {}
+    return None, {}
+
+
+def try_match_b_refresh_monitor_prices(text: str) -> tuple[str | None, dict]:
+    refresh_keywords = ("刷新监控价格", "刷新监控对象价格", "刷新价格")
+    if any(keyword in text for keyword in refresh_keywords):
+        return "ecom_watch.refresh_monitor_prices", {}
     return None, {}
 
 

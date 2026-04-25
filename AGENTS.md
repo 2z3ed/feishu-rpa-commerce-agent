@@ -658,59 +658,75 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P12-F：监控对象删除二次确认版
+P13-A：监控对象价格数据最小闭环版
 
-P12-A 已完成：
-- discovery 搜索结果卡片展示
-- 卡片失败 fallback 文本
+本轮是 A/B 双仓协同开发。
 
-P12-B 已完成：
-- 候选卡片“加入监控”按钮
-- 点击按钮可加入监控
-- 群聊中优先回复群聊
-- open_id 仅作为 fallback
+A 项目：feishu-rpa-commerce-agent  
+定位：飞书入口层、消息编排层、老板交互层、卡片展示层。
 
-P12-C 已完成：
-- “看看当前监控对象”优先返回管理卡片
-- active / inactive 支持暂停 / 恢复按钮
+B 项目：Ecom-Watch-Agent-Agent  
+定位：业务服务层，负责 monitor target、价格字段、价格刷新、价格计算。
 
-P12-D 已完成：
-- 超过 5 个监控对象时支持“查看更多”
-- 下一页仍保留暂停 / 恢复按钮
+当前固定原则：
 
-P12-E 已完成：
-- P12 卡片交互层收口
-- 老板演示路径统一
-- P12 回归脚本固化
-- 删除、批量、搜索过滤、排序明确后移
+- A 可以调用 B
+- A 不吞 B
+- A 不把 B 的价格业务逻辑搬进自己仓库
+- B 先实现价格数据能力
+- A 再接飞书命令与卡片展示
+- 两个仓库分别测试、分别清点、分别提交
+- 提交顺序：先 B，后 A
 
-本轮 P12-F 只做：
+本轮 P13-A 只做：
 
-监控对象删除二次确认能力。
+监控对象价格数据最小闭环。
+
+目标链路：
+
+监控对象
+→ 刷新价格
+→ 保存 current_price / last_price
+→ 计算 price_delta / price_delta_percent
+→ 飞书管理卡片展示价格信息
 
 当前禁止：
 
-- 不做点击即删除
-- 不做批量删除
-- 不做批量管理
-- 不做搜索过滤
-- 不做排序
-- 不做 PostgreSQL
-- 不做权限系统
-- 不做复杂回收站
-- 不新增其他业务动作
-- 不重写 P12-A / B / C / D / E
+- 不做定时任务
+- 不做复杂爬虫
+- 不做代理池
+- 不做反爬
+- 不做历史价格曲线
+- 不做价格告警
+- 不做库存 / SKU 规格矩阵
+- 不做批量采集治理
+- 不做复杂数据库迁移
+- 不破坏 P12 卡片交互层
 
 开始任何开发前，必须先阅读：
 
-- docs/p12/p12-project-plan.md
-- docs/p12/P12-agent-prompt.md
-- docs/p12/p12-boss-demo-sop.md
-- docs/p12/p12-acceptance-checklist.md
-- docs/p12/p12-closure-summary.md
-- README.md
+A 项目：
 - AGENTS.md
+- README.md
+- docs/p12/p12-closure-summary.md
+- app/services/feishu/cards/monitor_targets.py
+- app/services/feishu/longconn.py
+- app/tasks/ingress_tasks.py
+- app/clients/b_service_client.py
 
-P12-F 最小目标：
+B 项目：
+- README 或项目主说明
+- monitor target 相关 schema / service / API / tests
+- app/services/monitor_management_service.py
+- app/schemas/monitor_management.py
+- tests/test_monitor_management_api.py
 
-在监控对象管理卡片中增加“删除监控”入口，但点击后必须先进入二次确认。只有点击“确认删除”后，才允许调用 B 的删除能力。
+P13-A 最小通过标准：
+
+- B monitor target 有价格字段
+- B 能刷新至少一个对象价格
+- 第二次刷新能把 current_price 转为 last_price
+- B 能计算 price_delta / price_delta_percent
+- A 飞书管理卡片能展示价格信息
+- 未采集对象显示“暂未采集”
+- P12-B/C/D/F 不退化

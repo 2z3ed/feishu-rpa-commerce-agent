@@ -1,5 +1,5 @@
 from app.clients.b_service_client import BServiceError
-from app.graph.nodes.execute_action import execute_action
+from app.graph.nodes.execute_action import _build_monitor_targets_context, execute_action
 from app.graph.nodes.resolve_intent import resolve_intent
 
 
@@ -13,6 +13,13 @@ def test_resolve_monitor_targets_intent():
     state = {"normalized_text": "看看当前监控对象"}
     out = resolve_intent(state)
     assert out["intent_code"] == "ecom_watch.monitor_targets"
+
+
+def test_resolve_refresh_monitor_prices_intent():
+    for text in ("刷新监控价格", "刷新监控对象价格", "刷新价格"):
+        state = {"normalized_text": text}
+        out = resolve_intent(state)
+        assert out["intent_code"] == "ecom_watch.refresh_monitor_prices"
 
 
 def test_resolve_product_detail_intent():
@@ -108,6 +115,57 @@ def test_execute_monitor_targets_success(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "succeeded"
     assert "ID=123" in result["result_summary"]
+
+
+def test_build_monitor_targets_context_keeps_price_fields():
+    context = _build_monitor_targets_context(
+        targets_data={
+            "targets": [
+                {
+                    "product_id": 7,
+                    "product_name": "商品A",
+                    "status": "active",
+                    "product_url": "https://a.example",
+                    "current_price": 199.0,
+                    "last_price": 209.0,
+                    "price_delta": -10.0,
+                    "price_delta_percent": -4.78,
+                    "price_changed": True,
+                    "last_checked_at": "2026-04-25T17:30:00",
+                    "price_source": "mock_price",
+                }
+            ]
+        }
+    )
+    target = context["targets"][0]
+    assert target["target_id"] == 7
+    assert target["current_price"] == 199.0
+    assert target["last_price"] == 209.0
+    assert target["price_delta"] == -10.0
+    assert target["price_delta_percent"] == -4.78
+    assert target["price_changed"] is True
+    assert target["last_checked_at"] == "2026-04-25T17:30:00"
+    assert target["price_source"] == "mock_price"
+
+
+def test_execute_refresh_monitor_prices_success(monkeypatch):
+    def _fake_refresh(self):
+        return {
+            "total": 8,
+            "refreshed": 6,
+            "changed": 2,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.refresh_monitor_prices", _fake_refresh)
+    state = {"intent_code": "ecom_watch.refresh_monitor_prices", "slots": {}, "status": "processing"}
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "监控价格已刷新" in result["result_summary"]
+    assert "总对象数：8" in result["result_summary"]
+    assert "成功刷新：6" in result["result_summary"]
+    assert "价格变化：2" in result["result_summary"]
+    assert "失败：0" in result["result_summary"]
 
 
 def test_execute_product_detail_success(monkeypatch):
