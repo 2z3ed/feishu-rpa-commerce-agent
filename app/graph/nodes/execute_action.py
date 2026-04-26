@@ -1177,6 +1177,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"搜索失败：{str(e)}"
             elif intent_code == "ecom_watch.manage_monitor_target":
                 state["result_summary"] = f"操作失败：{str(e)}"
+            elif intent_code == "ecom_watch.refresh_monitor_prices":
+                state["result_summary"] = f"刷新失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"

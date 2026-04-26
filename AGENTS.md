@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-E：定时价格刷新任务轻量版
+P13-F：真实页面价格提取最小预演版
 
 本轮是 A/B 双仓协同开发。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、Celery 调度控制层、老板交互层。
+定位：飞书入口层、消息编排层、老板交互层、卡片展示层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格刷新、价格历史、刷新 run 留痕。
+定位：业务服务层，负责 monitor target、价格刷新、价格来源、HTML 价格提取、价格写入与 run 留痕。
 
 P13-A 已完成：
 - B 侧 monitor target 已有价格字段
@@ -676,79 +676,53 @@ P13-A 已完成：
 
 P13-B 已完成：
 - B 侧支持 price snapshots 历史记录
-- B 侧支持 price-history 查询 API
 - A 侧支持价格历史查询命令
 
 P13-C 已完成：
 - B 侧 refresh-prices 返回变化汇总
-- A 侧“刷新监控价格”返回老板可读变化摘要
+- A 侧刷新后展示价格变化摘要
 
 P13-D 已完成：
 - B 侧每次刷新生成 run_id
-- B 侧保存 refresh run / run items
-- A 侧刷新回复展示 run_id
 - A 侧支持按 run_id 查询刷新详情
 
-本轮 P13-E 只做：
+P13-E 已完成：
+- A 侧 Celery Beat 可定时刷新价格
+- B 侧 run 记录 trigger_source=scheduled
 
-定时价格刷新任务轻量版。
+本轮 P13-F 只做：
+
+真实页面价格提取最小预演。
 
 固定原则：
 
-- A 是调度控制层
-- B 是价格刷新执行层
-- A 通过 Celery Beat 定时调用 B
-- B 只增强 trigger_source 记录
-- 不让 B 变成调度系统
-- 不做飞书主动推送
-- 不做告警规则
-- 不做复杂调度平台
+- B 负责真实页面价格提取
+- A 不抓网页
+- A 不解析价格
+- A 只展示 B 返回的价格与 price_source
+- 真实提取失败时不得破坏刷新链路
+- 可 fallback 到 mock_price 或 unknown
 - 两个仓库分别测试、分别清点、分别提交
 - 提交顺序：先 B，后 A
 
 当前禁止：
 
-- 不做飞书主动推送
+- 不做反爬
+- 不做代理池
+- 不做 Playwright / 浏览器渲染
+- 不做多站点完美适配
+- 不做 SKU 规格选择
+- 不做币种换算系统
+- 不做大规模爬虫
 - 不做价格告警
-- 不做阈值规则
-- 不做用户订阅
-- 不做 cron UI
-- 不做复杂调度系统
-- 不做失败重试队列
-- 不做任务优先级
-- 不做复杂并发控制
-- 不破坏 P13-A/B/C/D
+- 不做主动推送
+- 不破坏 P13-A/B/C/D/E
 - 不破坏 P12 卡片交互层
 
-开始任何开发前，必须先阅读：
+P13-F 最小验收样本：
 
-A 项目：
-- AGENTS.md
-- README.md
-- docs/p13/p13-project-plan.md
-- docs/p13/P13-agent-prompt.md
-- app/workers/celery_app.py
-- app/tasks/ingress_tasks.py
-- app/clients/b_service_client.py
-- app/graph/nodes/execute_action.py
-- tests/test_p10_b_query_integration.py
-
-B 项目：
-- README 或项目主说明
-- app/schemas/monitor_management.py
-- app/services/monitor_management_service.py
-- app/api/routes_internal_monitor.py
-- tests/test_monitor_management_api.py
-
-P13-E 最小通过标准：
-
-- B 支持 trigger_source=scheduled
-- B refresh run 正确记录 trigger_source
-- A 有 Celery 定时任务 schedule_refresh_monitor_prices
-- A 的 Celery Beat 注册每 5 分钟执行一次
-- 定时任务调用 B refresh-prices
-- 每次定时执行生成 run_id
-- run 可通过 P13-D 查询
-- 手动刷新不退化
-- P13-A/B/C/D 不退化
-- P12 交互不退化
+- 商品：Hush Home® 深眠重力被
+- URL：hushhome.com/tw/products/weighted-blanket
+- 页面价格示例：HK$1,280.00
+- 期望：current_price 约为 1280.0
+- 期望：price_source=html_extract_preview

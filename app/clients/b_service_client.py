@@ -40,7 +40,7 @@ class BServiceClient:
         path = "/internal/monitor/refresh-prices"
         if safe_trigger_source:
             path = f"{path}?trigger_source={safe_trigger_source}"
-        return self._post_envelope_data(path, {})
+        return self._request_envelope_data(method="POST", path=path, json_payload={}, timeout_seconds=20.0)
 
     def get_monitor_target_price_history(self, target_id: int | str, limit: int = 5) -> dict[str, Any]:
         safe_limit = int(limit) if int(limit) > 0 else 5
@@ -117,11 +117,17 @@ class BServiceClient:
         method: str,
         path: str,
         json_payload: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         try:
-            response = self._client.request(method=method, url=path, json=json_payload)
+            request_kwargs: dict[str, Any] = {"method": method, "url": path, "json": json_payload}
+            if timeout_seconds is not None:
+                request_kwargs["timeout"] = timeout_seconds
+            response = self._client.request(**request_kwargs)
+        except httpx.TimeoutException as exc:
+            raise BServiceError(f"B 服务请求超时：{exc}") from exc
         except httpx.HTTPError as exc:
-            raise BServiceError(f"B 服务不可达，请确认 {self.base_url} 已启动：{exc}") from exc
+            raise BServiceError(f"B 服务连接失败，请确认 {self.base_url} 可访问：{exc}") from exc
 
         try:
             payload = response.json()

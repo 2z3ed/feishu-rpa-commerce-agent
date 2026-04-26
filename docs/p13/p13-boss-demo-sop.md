@@ -1,20 +1,21 @@
-# P13-E 老板演示 SOP
+# P13-F 老板演示 SOP
 
 ## 一、演示目标
 
-P13-E 的演示目标是证明：
+P13-F 的演示目标是证明：
 
-系统可以通过 Celery Beat 自动定时刷新监控价格，并生成可查询的刷新批次 run_id。
+系统不再只能使用 mock_price，而是可以从真实商品页面中提取价格，并写入监控对象。
 
-本轮不是飞书主动推送，不是价格告警，也不是阈值规则。
+本轮不是复杂爬虫，不是反爬，不是代理池。
 
 本轮只演示：
 
 ```text
-定时触发
-→ 调用 B refresh-prices
-→ 生成 run_id
-→ 可查询 run detail
+商品 URL
+→ HTML 页面
+→ 提取价格
+→ 写入 current_price
+→ price_source=html_extract_preview
 ```
 
 ## 二、演示前提
@@ -36,61 +37,42 @@ Ecom-Watch-Agent-Agent
 需要确保：
 
 - B 服务运行在 http://127.0.0.1:8005
-- A worker 正常
-- A Celery Beat 正常
-- Redis / broker 正常
-- 已有 active 监控对象
-- P13-D run 查询可用
+- A API / worker / 飞书长连接 listener 已启动
+- 已有 Hush Home 监控对象或可重新加入
+- P13-A 到 P13-E 能力已回归通过
 
-## 三、演示步骤
+## 三、演示样本
 
-### 步骤 1：启动 worker
-
-按项目当前命令启动 worker，例如：
-
-```bash
-celery -A app.workers.celery_app worker --loglevel=info
-```
-
-以仓库实际命令为准。
-
-### 步骤 2：启动 beat
-
-按项目当前命令启动 beat，例如：
-
-```bash
-celery -A app.workers.celery_app beat --loglevel=info
-```
-
-以仓库实际命令为准。
-
-### 步骤 3：观察定时触发日志
-
-等待定时任务触发。
-
-worker 日志应出现：
+样本：
 
 ```text
-=== P13E SCHEDULE TRIGGER START ===
-=== P13E CALL B REFRESH ===
-=== P13E SCHEDULE RESULT === run_id=... total=... changed=... failed=...
+Hush Home® 深眠重力被
+URL：https://www.hushhome.com/tw/products/weighted-blanket
+页面价格示例：HK$1,280.00
 ```
 
-### 步骤 4：查询 run detail
-
-复制日志中的 run_id，在飞书发送：
+期望：
 
 ```text
-查看刷新结果 PRR-...
+当前价格：1280.0
+来源：html_extract_preview
 ```
 
-预期：
+## 四、演示步骤
 
-- 能查询到 run detail
-- trigger_source 为 scheduled 或对应字段可验证
-- total / refreshed / changed / failed 正常
+### 步骤 1：确认对象在监控列表中
 
-### 步骤 5：回归手动刷新
+飞书发送：
+
+```text
+看看当前监控对象
+```
+
+确认 Hush Home 对象存在。
+
+如不存在，先搜索并加入监控。
+
+### 步骤 2：刷新监控价格
 
 飞书发送：
 
@@ -100,70 +82,127 @@ worker 日志应出现：
 
 预期：
 
-- 手动刷新仍可用
-- 仍返回 run_id
-- 仍有变化摘要
+- 刷新成功
+- 生成 run_id
+- 不报错
 
-### 步骤 6：回归 P13-B / P12
+### 步骤 3：查看管理卡片
 
 飞书发送：
 
 ```text
-查看价格历史 7
 看看当前监控对象
+```
+
+找到 Hush Home 对象。
+
+预期：
+
+```text
+当前价格：1280.0
+来源：html_extract_preview
+```
+
+如果提取失败：
+
+- 不能报堆栈
+- 允许 fallback 到 mock_price
+- 需要在日志或结果中可确认失败原因
+
+### 步骤 4：查看价格历史
+
+飞书发送：
+
+```text
+查看价格历史 <对象ID>
 ```
 
 预期：
 
-- 价格历史仍可用
-- 管理卡片仍可用
-- P12 按钮不退化
+- 价格历史中可看到本次刷新记录
+- 来源为 html_extract_preview 或 fallback 来源
 
-## 四、失败场景
+### 步骤 5：查看刷新 run
 
-可选：
+飞书发送：
 
-1. B 服务关闭时定时触发
-2. Redis / broker 未启动
-3. beat 启动但 worker 未启动
+```text
+查看刷新结果 <run_id>
+```
 
 预期：
 
-- 日志可见失败原因
-- 不主动乱发飞书消息
-- 不影响手动命令
+- run detail 可查
+- item 中价格来源可追踪
 
-## 五、验收记录模板
+## 五、回归验证
+
+必须回归：
 
 ```text
-P13-E 实机验收记录
+刷新监控价格
+查看价格历史 7
+查看刷新结果 PRR-...
+看看当前监控对象
+查看更多
+```
+
+P12 交互：
+
+- 加入监控
+- 暂停 / 恢复
+- 删除确认
+
+## 六、失败场景
+
+可选：
+
+1. URL 无法访问
+2. HTML 中没有价格
+3. 请求超时
+4. 返回非 HTML
+
+预期：
+
+- 不影响整轮刷新任务
+- fallback 可用
+- 不吐堆栈
+- 不静默失败
+
+## 七、验收记录模板
+
+```text
+P13-F 实机验收记录
 
 时间：
 A commit：
 B commit：
-B 服务状态：
-worker 状态：
-beat 状态：
+样本 URL：
 
-1. beat 是否启动：
+1. Hush Home 是否在监控对象中：
 结果：通过 / 未通过
 
-2. worker 是否收到定时任务：
-结果：通过 / 未通过
-
-3. 定时刷新是否生成 run_id：
+2. 刷新监控价格：
 结果：通过 / 未通过
 run_id：
 
-4. 飞书查询 run detail：
+3. 是否提取真实价格：
+结果：通过 / 未通过
+current_price：
+price_source：
+
+4. 价格历史是否记录：
 结果：通过 / 未通过
 
-5. 手动刷新回归：
+5. run detail 是否可追踪：
 结果：通过 / 未通过
 
-6. P13-B / P12 回归：
+6. fallback 是否稳定：
+结果：通过 / 未通过
+
+7. P12/P13 回归：
 结果：通过 / 未通过
 
 最终结论：
-P13-E 是否通过：
+P13-F 是否通过：
 ```
