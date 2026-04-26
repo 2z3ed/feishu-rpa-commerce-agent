@@ -27,6 +27,9 @@ def _normalize_target(item: dict) -> dict | None:
     price_changed = bool(item.get("price_changed", False))
     last_checked_at = item.get("last_checked_at")
     price_source = str(item.get("price_source") or "").strip()
+    price_probe_status = str(item.get("price_probe_status") or "unknown").strip().lower()
+    price_probe_error = str(item.get("price_probe_error") or "").strip().lower()
+    price_probe_checked_at = item.get("price_probe_checked_at")
     return {
         "target_id": target_id,
         "name": name,
@@ -39,6 +42,9 @@ def _normalize_target(item: dict) -> dict | None:
         "price_changed": price_changed,
         "last_checked_at": last_checked_at,
         "price_source": price_source,
+        "price_probe_status": price_probe_status or "unknown",
+        "price_probe_error": price_probe_error or None,
+        "price_probe_checked_at": price_probe_checked_at,
     }
 
 
@@ -115,6 +121,9 @@ def build_monitor_targets_card(
             price_changed = bool(target.get("price_changed", False))
             last_checked_at = str(target.get("last_checked_at") or "").strip()
             price_source = str(target.get("price_source") or "").strip()
+            probe_status = str(target.get("price_probe_status") or "unknown").strip().lower() or "unknown"
+            probe_error = str(target.get("price_probe_error") or "").strip().lower()
+            probe_checked_at = str(target.get("price_probe_checked_at") or "").strip()
 
             if current_price is None:
                 current_price_line = "暂未采集"
@@ -137,6 +146,7 @@ def build_monitor_targets_card(
                 source_line = price_source or "mock_price"
                 if not price_changed and price_delta is None:
                     change_line = "暂无变化数据"
+            probe_checked_line = probe_checked_at or checked_line
 
             elements.append(
                 {
@@ -154,6 +164,9 @@ def build_monitor_targets_card(
                                 f"- 变化：{change_line}",
                                 f"- 最后检测：{checked_line}",
                                 f"- 来源：{source_line}",
+                                f"- 采集状态：{probe_status}",
+                                f"- 采集时间：{probe_checked_line}",
+                                (f"- 采集原因：{probe_error}" if probe_error else "- 采集原因：-"),
                             ]
                         ),
                     },

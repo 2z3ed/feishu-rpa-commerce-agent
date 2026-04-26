@@ -1,48 +1,48 @@
-# P13-F 开发主线文档
+# P13-G 开发主线文档
 
 ## 阶段名称
 
-P13-F：真实页面价格提取最小预演版
+P13-G：价格采集失败治理轻量版
 
 ## 一、阶段背景
 
-P13-A 到 P13-E 已经完成价格监控的数据链路：
+P13-F 已经完成真实页面价格提取最小预演：
 
-- P13-A：价格字段与刷新闭环
-- P13-B：价格历史记录
-- P13-C：价格变化摘要
-- P13-D：刷新 run 留痕
-- P13-E：定时价格刷新
+- B 侧支持 html_extract_preview
+- Hush Home 样本可提取 1280.0
+- 提取失败可 fallback 到 mock_price
+- 批量刷新通过 timeout / budget / fallback 避免拖垮整批刷新
 
-但当前价格来源仍然主要是：
+但真实网页价格采集天然不稳定。
 
-```text
-mock_price
-```
-
-这说明系统的数据链路已经通了，但还没有真正验证：
+如果后续要做主动通知、价格告警、阈值规则，就必须先知道：
 
 ```text
-商品 URL → 网页 HTML → 价格提取 → 写入 current_price
+当前价格到底来自真实页面，还是 fallback？
+失败原因是什么？
+哪些对象仍然没有真实价格？
 ```
 
-因此 P13-F 不做主动通知，也不做复杂爬虫，而是先做真实页面价格提取的最小预演。
+所以 P13-G 只做一件事：
+
+采集状态与失败原因治理。
 
 ## 二、本轮唯一目标
 
 只做：
 
-真实页面价格提取最小预演。
+记录、返回并展示价格采集状态。
 
 目标链路：
 
 ```text
-读取 monitor target.product_url
-→ 请求页面 HTML
-→ 尝试提取价格
-→ 成功：写入 current_price，price_source=html_extract_preview
-→ 失败：fallback 到 mock_price 或 unknown
-→ 保持 price snapshot / refresh run / 定时刷新链路不退化
+刷新监控价格
+→ B 尝试 html price probe
+→ 成功：price_probe_status=success，price_source=html_extract_preview
+→ 失败 fallback：price_probe_status=fallback_mock，price_probe_error=timeout/no_price_found/...
+→ 完全失败：price_probe_status=failed 或 unknown
+→ A 管理卡片展示采集状态
+→ A 可查询采集失败 / mock / 真实价格对象
 ```
 
 ## 三、A/B 双仓分工
@@ -51,297 +51,311 @@ mock_price
 
 职责：
 
-- 保留飞书入口
-- 保留刷新监控价格命令
-- 保留管理卡片展示
-- 展示 B 返回的 current_price / price_source
+- 展示 B 返回的采集状态
+- 展示采集失败原因
+- 提供简单查询命令
 - 不抓网页
 - 不解析 HTML
-- 不计算真实价格
+- 不判断价格真假
+- 不做主动通知
 
 ### B 项目：Ecom-Watch-Agent-Agent
 
 职责：
 
-- 请求 product_url
-- 提取 HTML 中的价格
-- 决定 price_source
-- 写入 current_price / last_price
-- 写入 price snapshot
-- 写入 refresh run / run item
-- 提供测试覆盖
+- 在 monitor target 上记录 probe 状态
+- 在 run item 中记录 probe 状态
+- 返回采集状态字段
+- 保留 P13-F 的真实提取与 fallback
+- 保留 P13-A/B/C/D/E 链路
 
-B 是本轮核心改动仓库。
+## 四、B 项目最小字段
 
-## 四、最小验收样本
-
-本轮第一条真实验收样本：
+建议在 product / monitor target 上增加：
 
 ```text
-商品：Hush Home® 深眠重力被
-URL：https://www.hushhome.com/tw/products/weighted-blanket
-页面价格示例：HK$1,280.00
+price_probe_status
+price_probe_error
+price_probe_checked_at
+price_probe_raw_text
 ```
 
-最低期望：
+最低必须有：
 
 ```text
-current_price = 1280.0
-price_source = html_extract_preview
+price_probe_status
+price_probe_error
+price_probe_checked_at
 ```
 
-如果页面结构变化导致无法提取：
-
-- 不允许整个刷新任务失败
-- 必须返回可观测失败原因
-- 可以 fallback 到 mock_price 或 unknown
-
-## 五、B 项目价格提取设计
-
-建议新增轻量模块：
+建议状态值：
 
 ```text
-app/services/price_probe_service.py
-```
-
-或在 monitor_management_service.py 中保持最小函数，但建议独立模块，避免主 service 继续膨胀。
-
-最小函数：
-
-```text
-probe_product_price(product_url) -> PriceProbeResult
-```
-
-返回字段：
-
-```text
-price
-currency
-price_source
-raw_text
-error_message
-```
-
-最小来源：
-
-```text
-html_extract_preview
-```
-
-fallback 来源：
-
-```text
-mock_price
+success
+fallback_mock
+failed
 unknown
 ```
 
-## 六、HTML 提取规则
-
-P13-F 不做复杂爬虫。
-
-允许使用：
-
-- requests / httpx
-- 简单 HTML 文本正则
-- 常见价格格式正则
-
-建议识别：
+建议错误值：
 
 ```text
-HK$1,280.00
-$1,280.00
-USD $99.99
-NT$1,280
-¥1280
+timeout
+no_price_found
+http_error
+parse_error
+budget_exceeded
+unknown
 ```
 
-最小规则：
+说明：
 
-- 提取第一个可信价格
-- 去掉货币符号
-- 去掉千分位逗号
-- 转成 float
-- raw_text 保留原始命中文本
+- success：真实页面提取成功
+- fallback_mock：真实提取失败，但 mock_price 兜底成功
+- failed：没有可用价格
+- unknown：状态未知或未采集
 
-## 七、refresh_price 集成
+## 五、B API 返回要求
 
-P13-F 中 refresh_price 应变为：
+现有列表接口：
 
 ```text
-如果 product_url 可访问并提取成功：
-    使用 html_extract_preview 价格
-否则：
-    fallback 到 mock_price 或 unknown
+GET /internal/monitor/targets
 ```
 
-注意：
-
-- 不改变 P13-A 的 last_price/current_price 规则
-- 不破坏 P13-B snapshot
-- 不破坏 P13-C changed_items
-- 不破坏 P13-D run item
-- 不破坏 P13-E scheduled trigger
-
-## 八、A 项目展示要求
-
-A 侧管理卡片已有 price_source 展示。
-
-P13-F 只要求：
-
-- 当 B 返回 price_source=html_extract_preview 时，A 能正常展示
-- 未提取时仍显示已有 fallback 文案
-- 不新增复杂 UI
-
-管理卡片示例：
+需要返回：
 
 ```text
-当前价格：1280.0
+price_probe_status
+price_probe_error
+price_probe_checked_at
+price_probe_raw_text
+```
+
+现有 run detail：
+
+```text
+GET /internal/monitor/price-refresh-runs/{run_id}
+```
+
+run items 中需要返回：
+
+```text
+price_probe_status
+price_probe_error
+```
+
+如有 raw_text，也可返回：
+
+```text
+price_probe_raw_text
+```
+
+## 六、A 项目展示要求
+
+### 管理卡片
+
+“看看当前监控对象”中增加：
+
+成功时：
+
+```text
+采集状态：success
 来源：html_extract_preview
 ```
 
-如果 B 返回 currency，可选展示：
+fallback 时：
 
 ```text
-币种：HKD
+采集状态：fallback_mock
+采集原因：timeout
+来源：mock_price
 ```
 
-但本轮不强制做币种系统。
+失败时：
 
-## 九、本轮允许做
+```text
+采集状态：failed
+采集原因：no_price_found
+来源：unknown
+```
+
+### 查询命令
+
+新增文本命令：
+
+```text
+查看价格采集失败
+查看采集失败对象
+查看mock价格对象
+查看真实价格对象
+```
+
+返回示例：
+
+```text
+价格采集失败对象（共 3 个）：
+
+1. XXX
+   对象ID：8
+   来源：mock_price
+   状态：fallback_mock
+   原因：timeout
+
+2. XXX
+   对象ID：12
+   来源：unknown
+   状态：failed
+   原因：no_price_found
+```
+
+真实价格对象：
+
+```text
+真实价格对象（共 5 个）：
+1. Hush Home® 深眠重力被
+   对象ID：6
+   当前价格：1280.0
+   来源：html_extract_preview
+```
+
+## 七、本轮允许做
 
 B 项目允许：
 
-1. 新增轻量价格提取 service
-2. 请求 HTML 页面
-3. 正则提取价格
-4. refresh_price 优先使用 html_extract_preview
-5. 失败时 fallback
-6. 记录 price_source
-7. 补 B 测试
+1. 增加 probe 状态字段
+2. refresh_price 写入 probe 状态
+3. run item 写入 probe 状态
+4. list 返回 probe 状态
+5. run detail 返回 probe 状态
+6. 增加 B 测试
 
 A 项目允许：
 
-1. 必要时调整卡片展示 price_source
-2. 必要时调整测试期望
-3. 更新 README / docs / AGENTS
-4. 不新增复杂交互
+1. 管理卡片展示采集状态
+2. 新增采集状态查询命令
+3. BServiceClient 复用 monitor targets list
+4. execute_action 增加查询结果格式化
+5. 增加 A 测试
+6. 更新 README / docs / AGENTS
 
-## 十、本轮禁止做
+## 八、本轮禁止做
 
 禁止：
 
-- 不做反爬
-- 不做代理池
-- 不做浏览器渲染
-- 不做 Playwright
-- 不做多站点完美适配
-- 不做 SKU 规格选择
-- 不做币种换算系统
-- 不做价格告警
 - 不做主动推送
-- 不做定时策略调整
-- 不做复杂错误治理
-- 不新增历史价格之外的新数据体系
-- 不破坏 P13-A/B/C/D/E
+- 不做价格告警
+- 不做阈值规则
+- 不做自动重试
+- 不做失败重试队列
+- 不做复杂采集失败治理系统
+- 不做 Playwright
+- 不做浏览器渲染
+- 不做代理池
+- 不做站点适配规则库
+- 不做人工修正价格
+- 不做白名单 / 黑名单配置
+- 不做复杂失败报表
+- 不破坏 P13-A/B/C/D/E/F
 - 不破坏 P12 卡片交互
+- 不混入 P13-H/I/J
 
-## 十一、推荐开发顺序
+## 九、推荐开发顺序
 
-### P13-F.0：B 侧 refresh_price 当前锚定
+### P13-G.0：B 侧 probe 信息锚定
 
-先确认当前 refresh_price 如何生成 mock_price。
+先检查 P13-F 是否已在 raw_payload 中保存 probe 信息。
 
-明确当前：
+如果已有：
 
-- mock_price 生成规则
-- current_price / last_price 更新位置
-- snapshot 写入位置
-- run item 写入位置
+- 尽量复用
+- 不重复设计
 
-### P13-F.1：新增 price probe
+如果没有：
 
-实现最小 HTML 价格提取。
+- 增加最小字段
 
-优先可测试，不追求覆盖所有站点。
+### P13-G.1：B 侧字段与返回
 
-### P13-F.2：接入 refresh_price
-
-refresh_price 优先调用 price probe。
-
-成功：
+让 product / monitor target 返回：
 
 ```text
-price_source=html_extract_preview
+price_probe_status
+price_probe_error
+price_probe_checked_at
 ```
 
-失败：
+可选：
 
 ```text
-fallback mock_price 或 unknown
+price_probe_raw_text
 ```
 
-### P13-F.3：测试 Hush Home 样本
+### P13-G.2：B 侧 run item 扩展
 
-使用 mock HTML 或 fixture 测试：
+让 refresh run item 也记录 probe 状态，方便追溯某次刷新采集情况。
+
+### P13-G.3：A 管理卡片展示
+
+“看看当前监控对象”中增加采集状态和失败原因。
+
+### P13-G.4：A 查询命令
+
+新增：
 
 ```text
-HK$1,280.00 -> 1280.0
+查看价格采集失败
+查看mock价格对象
+查看真实价格对象
 ```
 
-如允许联网实测，再做手动验收。
+本轮先做文本结果，不做新卡片。
 
-### P13-F.4：A 侧展示回归
-
-确认 A 管理卡片展示：
-
-```text
-来源：html_extract_preview
-```
-
-### P13-F.5：回归
+### P13-G.5：回归
 
 必须回归：
 
-- P13-A 刷新价格
+- P13-F Hush Home 提取
+- P13-E 定时刷新
+- P13-D run 查询
 - P13-B 价格历史
 - P13-C 变化摘要
-- P13-D run 查询
-- P13-E 定时刷新
 - P12 卡片交互
 
-## 十二、通过标准
+## 十、通过标准
 
-P13-F 通过条件：
+P13-G 通过条件：
 
-- B 能从至少一个 HTML 样本提取价格
-- Hush Home 样本 HK$1,280.00 能解析为 1280.0
-- 成功时 price_source=html_extract_preview
-- 提取失败时刷新链路不崩
-- fallback 可用
-- A 管理卡片能展示 html_extract_preview
-- P13-A/B/C/D/E 不退化
+- B 能记录 price_probe_status
+- B 能记录 price_probe_error
+- B 能记录 price_probe_checked_at
+- B list 返回 probe 状态
+- B run detail 返回 probe 状态
+- A 管理卡片展示采集状态
+- A 查询 failed / fallback / true html 对象可用
+- P13-F 真实价格提取不退化
+- P13-E 定时刷新不退化
+- P13-A/B/C/D 不退化
 - P12 不退化
 - A/B 分别测试通过
 - A/B 分别提交
 
-## 十三、提交边界
+## 十一、提交边界
 
 B 项目允许提交：
 
-- price probe service
-- monitor refresh 集成
-- schema 如需补充 source/currency/raw 字段
-- tests
+- product / schema / service / run item / tests 中与 probe 状态有关的最小改动
 
 A 项目允许提交：
 
-- 管理卡片 price_source 展示微调
+- 卡片展示采集状态
+- 查询命令
+- P13-G 测试
 - docs / README / AGENTS 阶段说明
-- tests
 
 禁止混入：
 
-- P13-G 主动通知
-- P13-H 阈值提醒
-- P13-I 采集失败治理
+- P13-H 主动通知
+- P13-I 阈值提醒
+- P13-J 采集重试治理
 - 无关重构

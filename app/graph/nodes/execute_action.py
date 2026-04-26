@@ -174,6 +174,10 @@ def _extract_monitor_target_minimal(item: dict) -> dict | None:
         "price_changed": bool(item.get("price_changed", False)),
         "last_checked_at": item.get("last_checked_at"),
         "price_source": item.get("price_source"),
+        "price_probe_status": item.get("price_probe_status"),
+        "price_probe_error": item.get("price_probe_error"),
+        "price_probe_checked_at": item.get("price_probe_checked_at"),
+        "price_probe_raw_text": item.get("price_probe_raw_text"),
     }
 
 
@@ -471,6 +475,25 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p10_query_chain"
             state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.monitor_probe_query":
+            query_type = str(slots.get("query_type") or "failed").strip().lower()
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_monitor_probe_query_result(result, query_type=query_type)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.probe_query"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13g_probe_query_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
 
         elif intent_code == "ecom_watch.refresh_monitor_prices":
             b_client = BServiceClient()
@@ -1296,6 +1319,64 @@ def format_b_monitor_targets_result(data: dict) -> str:
             lines.append(f"- {idx}. {name}（{status}，ID={pid}）")
         else:
             lines.append(f"- {idx}. {item}")
+    return "\n".join(lines)
+
+
+def format_b_monitor_probe_query_result(data: dict, *, query_type: str) -> str:
+    raw_targets = data.get("targets")
+    if not isinstance(raw_targets, list):
+        raw_targets = data.get("items") if isinstance(data.get("items"), list) else []
+
+    def _is_failed(item: dict) -> bool:
+        status = str(item.get("price_probe_status") or "unknown").strip().lower()
+        return status in {"failed", "fallback_mock"}
+
+    def _is_mock(item: dict) -> bool:
+        status = str(item.get("price_probe_status") or "unknown").strip().lower()
+        source = str(item.get("price_source") or "").strip().lower()
+        return status == "fallback_mock" or source == "mock_price"
+
+    def _is_real(item: dict) -> bool:
+        status = str(item.get("price_probe_status") or "unknown").strip().lower()
+        source = str(item.get("price_source") or "").strip().lower()
+        return status == "success" or source == "html_extract_preview"
+
+    query_type = query_type if query_type in {"failed", "mock", "real"} else "failed"
+    if query_type == "mock":
+        matched = [item for item in raw_targets if isinstance(item, dict) and _is_mock(item)]
+        title = "mock价格对象"
+    elif query_type == "real":
+        matched = [item for item in raw_targets if isinstance(item, dict) and _is_real(item)]
+        title = "真实价格对象"
+    else:
+        matched = [item for item in raw_targets if isinstance(item, dict) and _is_failed(item)]
+        title = "价格采集失败对象"
+
+    lines = [f"{title}（共 {len(matched)} 个）："]
+    if not matched:
+        lines.append("无")
+        return "\n".join(lines)
+
+    display = matched[:10]
+    for idx, item in enumerate(display, start=1):
+        name = str(item.get("name") or item.get("product_name") or "未命名对象")
+        pid = item.get("id") or item.get("product_id") or item.get("target_id") or "-"
+        current_price = item.get("current_price")
+        source = str(item.get("price_source") or "unknown")
+        probe_status = str(item.get("price_probe_status") or "unknown")
+        probe_error = str(item.get("price_probe_error") or "unknown")
+        lines.extend(
+            [
+                f"{idx}. {name}",
+                f"   对象ID：{pid}",
+                f"   当前价格：{current_price if current_price is not None else '-'}",
+                f"   来源：{source}",
+                f"   状态：{probe_status}",
+                f"   原因：{probe_error}",
+            ]
+        )
+    if len(matched) > 10:
+        lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
     return "\n".join(lines)
 
 

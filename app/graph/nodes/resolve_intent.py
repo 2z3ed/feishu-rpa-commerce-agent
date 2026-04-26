@@ -37,6 +37,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_targets(normalized_text)
 
+    # P13-G: query monitor targets by probe status/source.
+    if not intent_code:
+        intent_code, slots = try_match_b_monitor_probe_query(normalized_text)
+
     # P13-A: refresh monitor target prices via B service.
     if not intent_code:
         intent_code, slots = try_match_b_refresh_monitor_prices(normalized_text)
@@ -112,6 +116,19 @@ def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
     monitor_keywords = ("看看当前监控对象", "当前监控哪些商品", "监控列表")
     if any(keyword in text for keyword in monitor_keywords):
         return "ecom_watch.monitor_targets", {}
+    return None, {}
+
+
+def try_match_b_monitor_probe_query(text: str) -> tuple[str | None, dict]:
+    failed_keywords = ("查看价格采集失败", "查看采集失败对象")
+    mock_keywords = ("查看mock价格对象",)
+    real_keywords = ("查看真实价格对象",)
+    if any(keyword in text for keyword in failed_keywords):
+        return "ecom_watch.monitor_probe_query", {"query_type": "failed"}
+    if any(keyword in text for keyword in mock_keywords):
+        return "ecom_watch.monitor_probe_query", {"query_type": "mock"}
+    if any(keyword in text for keyword in real_keywords):
+        return "ecom_watch.monitor_probe_query", {"query_type": "real"}
     return None, {}
 
 

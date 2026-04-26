@@ -59,3 +59,30 @@ def test_monitor_targets_card_price_fields_collected() -> None:
     assert "变化：下降 10.0（-4.78%）" in text
     assert "最后检测：2026-04-25 17:30" in text
     assert "来源：mock_price" in text
+
+
+def test_monitor_targets_card_probe_fields() -> None:
+    card = build_monitor_targets_card(
+        targets=[
+            {
+                "target_id": 3,
+                "name": "商品C",
+                "status": "active",
+                "url": "https://example.com/c",
+                "current_price": 110,
+                "last_price": 100,
+                "price_delta": 10,
+                "price_delta_percent": 10.0,
+                "price_changed": True,
+                "last_checked_at": "2026-04-26 10:00",
+                "price_source": "mock_price",
+                "price_probe_status": "fallback_mock",
+                "price_probe_error": "timeout",
+                "price_probe_checked_at": "2026-04-26 10:01",
+            }
+        ]
+    )
+    text = _collect_div_text(card)
+    assert "采集状态：fallback_mock" in text
+    assert "采集原因：timeout" in text
+    assert "采集时间：2026-04-26 10:01" in text

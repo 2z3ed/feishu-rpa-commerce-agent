@@ -22,6 +22,20 @@ def test_resolve_refresh_monitor_prices_intent():
         assert out["intent_code"] == "ecom_watch.refresh_monitor_prices"
 
 
+def test_resolve_monitor_probe_query_intent():
+    cases = {
+        "查看价格采集失败": "failed",
+        "查看采集失败对象": "failed",
+        "查看mock价格对象": "mock",
+        "查看真实价格对象": "real",
+    }
+    for text, expected in cases.items():
+        state = {"normalized_text": text}
+        out = resolve_intent(state)
+        assert out["intent_code"] == "ecom_watch.monitor_probe_query"
+        assert out["slots"]["query_type"] == expected
+
+
 def test_resolve_monitor_price_history_intent():
     state_1 = {"normalized_text": "查看价格历史 7"}
     out_1 = resolve_intent(state_1)
@@ -160,6 +174,85 @@ def test_execute_monitor_targets_success(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "succeeded"
     assert "ID=123" in result["result_summary"]
+
+
+def test_execute_monitor_probe_query_failed_objects(monkeypatch):
+    def _fake_targets(self):
+        return {
+            "targets": [
+                {
+                    "id": 1,
+                    "name": "商品A",
+                    "current_price": 100,
+                    "price_source": "mock_price",
+                    "price_probe_status": "fallback_mock",
+                    "price_probe_error": "timeout",
+                },
+                {
+                    "id": 2,
+                    "name": "商品B",
+                    "current_price": 200,
+                    "price_source": "html_extract_preview",
+                    "price_probe_status": "success",
+                    "price_probe_error": None,
+                },
+            ]
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_monitor_targets", _fake_targets)
+    state = {
+        "intent_code": "ecom_watch.monitor_probe_query",
+        "slots": {"query_type": "failed"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "价格采集失败对象（共 1 个）" in result["result_summary"]
+    assert "状态：fallback_mock" in result["result_summary"]
+    assert "原因：timeout" in result["result_summary"]
+
+
+def test_execute_monitor_probe_query_mock_and_real(monkeypatch):
+    def _fake_targets(self):
+        return {
+            "targets": [
+                {
+                    "id": 1,
+                    "name": "商品A",
+                    "current_price": 100,
+                    "price_source": "mock_price",
+                    "price_probe_status": "fallback_mock",
+                    "price_probe_error": "timeout",
+                },
+                {
+                    "id": 2,
+                    "name": "商品B",
+                    "current_price": 200,
+                    "price_source": "html_extract_preview",
+                    "price_probe_status": "success",
+                    "price_probe_error": None,
+                },
+            ]
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_monitor_targets", _fake_targets)
+    mock_state = {
+        "intent_code": "ecom_watch.monitor_probe_query",
+        "slots": {"query_type": "mock"},
+        "status": "processing",
+    }
+    mock_result = execute_action(mock_state)
+    assert mock_result["status"] == "succeeded"
+    assert "mock价格对象（共 1 个）" in mock_result["result_summary"]
+
+    real_state = {
+        "intent_code": "ecom_watch.monitor_probe_query",
+        "slots": {"query_type": "real"},
+        "status": "processing",
+    }
+    real_result = execute_action(real_state)
+    assert real_result["status"] == "succeeded"
+    assert "真实价格对象（共 1 个）" in real_result["result_summary"]
 
 
 def test_build_monitor_targets_context_keeps_price_fields():

@@ -658,71 +658,61 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-F：真实页面价格提取最小预演版
+P13-G：价格采集失败治理轻量版
 
 本轮是 A/B 双仓协同开发。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、老板交互层、卡片展示层。
+定位：飞书入口层、消息编排层、老板交互层、卡片 / 文本展示层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格刷新、价格来源、HTML 价格提取、价格写入与 run 留痕。
+定位：业务服务层，负责 monitor target、真实价格提取、probe 状态记录、失败原因记录、run 留痕。
 
-P13-A 已完成：
-- B 侧 monitor target 已有价格字段
-- B 侧支持刷新价格
-- A 侧支持“刷新监控价格”
-- A 侧管理卡片可展示价格字段
+P13-F 已完成：
+- B 侧支持 html_extract_preview 真实页面价格提取
+- B 侧支持 mock_price fallback
+- Hush Home 样本可提取 1280.0
+- 批量刷新超时问题已通过 timeout/budget/fallback 修复
 
-P13-B 已完成：
-- B 侧支持 price snapshots 历史记录
-- A 侧支持价格历史查询命令
+本轮 P13-G 只做：
 
-P13-C 已完成：
-- B 侧 refresh-prices 返回变化汇总
-- A 侧刷新后展示价格变化摘要
-
-P13-D 已完成：
-- B 侧每次刷新生成 run_id
-- A 侧支持按 run_id 查询刷新详情
-
-P13-E 已完成：
-- A 侧 Celery Beat 可定时刷新价格
-- B 侧 run 记录 trigger_source=scheduled
-
-本轮 P13-F 只做：
-
-真实页面价格提取最小预演。
+价格采集状态与失败原因治理。
 
 固定原则：
 
-- B 负责真实页面价格提取
+- B 负责记录 probe 状态和失败原因
 - A 不抓网页
-- A 不解析价格
-- A 只展示 B 返回的价格与 price_source
-- 真实提取失败时不得破坏刷新链路
-- 可 fallback 到 mock_price 或 unknown
+- A 不解析 HTML
+- A 不判断价格真假
+- A 只展示 B 返回的采集状态
+- 不做主动通知
+- 不做重试队列
+- 不做站点适配规则库
 - 两个仓库分别测试、分别清点、分别提交
 - 提交顺序：先 B，后 A
 
 当前禁止：
 
-- 不做反爬
-- 不做代理池
-- 不做 Playwright / 浏览器渲染
-- 不做多站点完美适配
-- 不做 SKU 规格选择
-- 不做币种换算系统
-- 不做大规模爬虫
-- 不做价格告警
 - 不做主动推送
-- 不破坏 P13-A/B/C/D/E
+- 不做价格告警
+- 不做阈值规则
+- 不做自动重试
+- 不做失败重试队列
+- 不做 Playwright / 浏览器渲染
+- 不做代理池
+- 不做站点适配规则库
+- 不做人工修正价格
+- 不做复杂失败报表
+- 不破坏 P13-A/B/C/D/E/F
 - 不破坏 P12 卡片交互层
 
-P13-F 最小验收样本：
+P13-G 最小通过标准：
 
-- 商品：Hush Home® 深眠重力被
-- URL：hushhome.com/tw/products/weighted-blanket
-- 页面价格示例：HK$1,280.00
-- 期望：current_price 约为 1280.0
-- 期望：price_source=html_extract_preview
+- B 能记录 price_probe_status
+- B 能记录 price_probe_error
+- B 能记录 price_probe_checked_at
+- B monitor targets 返回采集状态字段
+- B run detail item 返回采集状态字段
+- A 管理卡片展示采集状态
+- A 能查询 failed / fallback_mock / html_extract_preview 对象
+- P13-F 真实价格提取不退化
