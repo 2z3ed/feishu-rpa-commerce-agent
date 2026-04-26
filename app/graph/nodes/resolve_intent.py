@@ -41,6 +41,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_probe_query(normalized_text)
 
+    # P13-H: retry failed/mock probe objects.
+    if not intent_code:
+        intent_code, slots = try_match_b_retry_price_probe(normalized_text)
+
     # P13-A: refresh monitor target prices via B service.
     if not intent_code:
         intent_code, slots = try_match_b_refresh_monitor_prices(normalized_text)
@@ -129,6 +133,22 @@ def try_match_b_monitor_probe_query(text: str) -> tuple[str | None, dict]:
         return "ecom_watch.monitor_probe_query", {"query_type": "mock"}
     if any(keyword in text for keyword in real_keywords):
         return "ecom_watch.monitor_probe_query", {"query_type": "real"}
+    return None, {}
+
+
+def try_match_b_retry_price_probe(text: str) -> tuple[str | None, dict]:
+    single_patterns = (
+        r"^重试对象\s*(\d+)\s*价格采集$",
+        r"^重试对象ID\s*(\d+)\s*价格采集$",
+    )
+    for pattern in single_patterns:
+        match = re.search(pattern, text)
+        if match:
+            return "ecom_watch.retry_price_probe", {"target_id": int(match.group(1))}
+
+    batch_keywords = ("重试价格采集", "重试采集失败对象", "重试mock价格对象")
+    if any(keyword in text for keyword in batch_keywords):
+        return "ecom_watch.retry_price_probes", {}
     return None, {}
 
 

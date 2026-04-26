@@ -42,6 +42,20 @@ class BServiceClient:
             path = f"{path}?trigger_source={safe_trigger_source}"
         return self._request_envelope_data(method="POST", path=path, json_payload={}, timeout_seconds=20.0)
 
+    def retry_monitor_target_price_probe(self, target_id: int | str, trigger_source: str | None = None) -> dict[str, Any]:
+        safe_trigger_source = str(trigger_source or "").strip()
+        path = f"/internal/monitor/{int(target_id)}/retry-price-probe"
+        if safe_trigger_source:
+            path = f"{path}?trigger_source={safe_trigger_source}"
+        return self._request_envelope_data(method="POST", path=path, json_payload={}, timeout_seconds=20.0)
+
+    def retry_monitor_price_probes(self, trigger_source: str | None = None) -> dict[str, Any]:
+        safe_trigger_source = str(trigger_source or "").strip()
+        path = "/internal/monitor/retry-price-probes"
+        if safe_trigger_source:
+            path = f"{path}?trigger_source={safe_trigger_source}"
+        return self._request_envelope_data(method="POST", path=path, json_payload={}, timeout_seconds=20.0)
+
     def get_monitor_target_price_history(self, target_id: int | str, limit: int = 5) -> dict[str, Any]:
         safe_limit = int(limit) if int(limit) > 0 else 5
         return self._get_envelope_data(

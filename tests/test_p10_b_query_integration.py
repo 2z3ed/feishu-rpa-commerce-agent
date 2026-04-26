@@ -36,6 +36,22 @@ def test_resolve_monitor_probe_query_intent():
         assert out["slots"]["query_type"] == expected
 
 
+def test_resolve_retry_price_probe_intents():
+    batch_cases = ("重试价格采集", "重试采集失败对象", "重试mock价格对象")
+    for text in batch_cases:
+        out = resolve_intent({"normalized_text": text})
+        assert out["intent_code"] == "ecom_watch.retry_price_probes"
+
+    single_cases = {
+        "重试对象 7 价格采集": 7,
+        "重试对象ID 7 价格采集": 7,
+    }
+    for text, expected_id in single_cases.items():
+        out = resolve_intent({"normalized_text": text})
+        assert out["intent_code"] == "ecom_watch.retry_price_probe"
+        assert out["slots"]["target_id"] == expected_id
+
+
 def test_resolve_monitor_price_history_intent():
     state_1 = {"normalized_text": "查看价格历史 7"}
     out_1 = resolve_intent(state_1)
@@ -253,6 +269,74 @@ def test_execute_monitor_probe_query_mock_and_real(monkeypatch):
     real_result = execute_action(real_state)
     assert real_result["status"] == "succeeded"
     assert "真实价格对象（共 1 个）" in real_result["result_summary"]
+
+
+def test_execute_retry_price_probes_summary(monkeypatch):
+    def _fake_retry(self, trigger_source: str | None = None):
+        assert trigger_source == "manual_feishu"
+        return {
+            "run_id": "RPR-20260426-ABCD",
+            "retried": 5,
+            "total_candidates": 5,
+            "success": 2,
+            "still_failed": 3,
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.retry_monitor_price_probes", _fake_retry)
+    state = {"intent_code": "ecom_watch.retry_price_probes", "slots": {}, "status": "processing"}
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "价格采集重试完成" in result["result_summary"]
+    assert "重试对象：5 个" in result["result_summary"]
+    assert "成功转真实价格：2 个" in result["result_summary"]
+    assert "仍失败：3 个" in result["result_summary"]
+
+
+def test_execute_retry_price_probe_single_success_and_failed(monkeypatch):
+    success_payload = {
+        "product_id": 6,
+        "eligible": True,
+        "retried": True,
+        "price_probe_status": "success",
+        "price_source": "html_extract_preview",
+        "current_price": 1280.0,
+    }
+    failed_payload = {
+        "product_id": 9,
+        "eligible": True,
+        "retried": True,
+        "price_probe_status": "fallback_mock",
+        "price_probe_error": "timeout",
+        "price_source": "mock_price",
+        "current_price": 210.0,
+    }
+
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.retry_monitor_target_price_probe",
+        lambda self, target_id, trigger_source=None: success_payload if int(target_id) == 6 else failed_payload,
+    )
+    success_state = {
+        "intent_code": "ecom_watch.retry_price_probe",
+        "slots": {"target_id": 6},
+        "status": "processing",
+    }
+    success_result = execute_action(success_state)
+    assert success_result["status"] == "succeeded"
+    assert "价格采集重试成功" in success_result["result_summary"]
+    assert "对象ID：6" in success_result["result_summary"]
+    assert "来源：html_extract_preview" in success_result["result_summary"]
+
+    failed_state = {
+        "intent_code": "ecom_watch.retry_price_probe",
+        "slots": {"target_id": 9},
+        "status": "processing",
+    }
+    failed_result = execute_action(failed_state)
+    assert failed_result["status"] == "succeeded"
+    assert "价格采集重试后仍未成功" in failed_result["result_summary"]
+    assert "对象ID：9" in failed_result["result_summary"]
+    assert "状态：fallback_mock" in failed_result["result_summary"]
+    assert "原因：timeout" in failed_result["result_summary"]
 
 
 def test_build_monitor_targets_context_keeps_price_fields():

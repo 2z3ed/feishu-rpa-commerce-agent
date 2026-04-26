@@ -495,6 +495,45 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "b_service_client"
             state["action_executed_detail"] = result
 
+        elif intent_code == "ecom_watch.retry_price_probe":
+            target_id = slots.get("target_id")
+            if target_id is None:
+                raise ValueError("缺少 target_id")
+            b_client = BServiceClient()
+            result = b_client.retry_monitor_target_price_probe(int(target_id), trigger_source="manual_feishu")
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_retry_price_probe_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.retry_price_probe"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_retry_price_probe_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13h_retry_single_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
+        elif intent_code == "ecom_watch.retry_price_probes":
+            b_client = BServiceClient()
+            result = b_client.retry_monitor_price_probes(trigger_source="manual_feishu")
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_retry_price_probes_result(result)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.retry_price_probes"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_retry_price_probes_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13h_retry_batch_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
         elif intent_code == "ecom_watch.refresh_monitor_prices":
             b_client = BServiceClient()
             result = b_client.refresh_monitor_prices(trigger_source="manual_feishu")
@@ -1202,6 +1241,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"操作失败：{str(e)}"
             elif intent_code == "ecom_watch.refresh_monitor_prices":
                 state["result_summary"] = f"刷新失败：{str(e)}"
+            elif intent_code in ("ecom_watch.retry_price_probe", "ecom_watch.retry_price_probes"):
+                state["result_summary"] = f"重试失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"
@@ -1377,6 +1418,63 @@ def format_b_monitor_probe_query_result(data: dict, *, query_type: str) -> str:
         )
     if len(matched) > 10:
         lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+    return "\n".join(lines)
+
+
+def format_b_retry_price_probe_result(data: dict) -> str:
+    target_id = data.get("product_id") or "-"
+    probe_status = str(data.get("price_probe_status") or "unknown")
+    probe_error = str(data.get("price_probe_error") or "unknown")
+    price_source = str(data.get("price_source") or "unknown")
+    current_price = data.get("current_price")
+    eligible = bool(data.get("eligible", False))
+    retried = bool(data.get("retried", False))
+
+    if not eligible:
+        return "\n".join(
+            [
+                "该对象当前不在重试范围内。",
+                f"对象ID：{target_id}",
+                f"状态：{probe_status}",
+                f"来源：{price_source}",
+            ]
+        )
+
+    if retried and probe_status == "success":
+        return "\n".join(
+            [
+                "价格采集重试成功。",
+                f"对象ID：{target_id}",
+                f"当前价格：{current_price if current_price is not None else '-'}",
+                f"来源：{price_source}",
+            ]
+        )
+
+    return "\n".join(
+        [
+            "价格采集重试后仍未成功。",
+            f"对象ID：{target_id}",
+            f"状态：{probe_status}",
+            f"原因：{probe_error}",
+            f"来源：{price_source}",
+        ]
+    )
+
+
+def format_b_retry_price_probes_result(data: dict) -> str:
+    total = int(data.get("retried") or data.get("total_candidates") or 0)
+    success = int(data.get("success") or 0)
+    still_failed = int(data.get("still_failed") or 0)
+    lines = [
+        "价格采集重试完成。",
+        "",
+        f"重试对象：{total} 个",
+        f"成功转真实价格：{success} 个",
+        f"仍失败：{still_failed} 个",
+    ]
+    run_id = str(data.get("run_id") or "").strip()
+    if run_id:
+        lines.append(f"重试批次：{run_id}")
     return "\n".join(lines)
 
 
