@@ -36,6 +36,19 @@ def test_resolve_monitor_probe_query_intent():
         assert out["slots"]["query_type"] == expected
 
 
+def test_resolve_monitor_diagnostics_query_intent():
+    cases = {
+        "查看价格异常对象": "price_anomaly",
+        "查看低可信价格对象": "low_confidence",
+        "查看价格监控状态": "monitor_status",
+        "价格监控概览": "monitor_overview",
+    }
+    for text, expected in cases.items():
+        out = resolve_intent({"normalized_text": text})
+        assert out["intent_code"] == "ecom_watch.monitor_diagnostics_query"
+        assert out["slots"]["query_type"] == expected
+
+
 def test_resolve_retry_price_probe_intents():
     batch_cases = ("重试价格采集", "重试采集失败对象", "重试mock价格对象")
     for text in batch_cases:
@@ -269,6 +282,78 @@ def test_execute_monitor_probe_query_mock_and_real(monkeypatch):
     real_result = execute_action(real_state)
     assert real_result["status"] == "succeeded"
     assert "真实价格对象（共 1 个）" in real_result["result_summary"]
+
+
+def test_execute_monitor_diagnostics_queries(monkeypatch):
+    def _fake_targets(self):
+        return {
+            "targets": [
+                {
+                    "id": 1,
+                    "name": "商品A",
+                    "current_price": 15020,
+                    "last_price": 1280,
+                    "price_source": "html_extract_preview",
+                    "price_probe_status": "success",
+                    "price_confidence": "low",
+                    "price_page_type": "listing_page",
+                    "price_anomaly_status": "suspected",
+                    "price_anomaly_reason": "当前价格超过 10000，疑似误提取",
+                    "price_action_suggestion": "建议优先人工复查该对象价格来源。",
+                },
+                {
+                    "id": 2,
+                    "name": "商品B",
+                    "current_price": 220.0,
+                    "price_source": "mock_price",
+                    "price_probe_status": "fallback_mock",
+                    "price_confidence": "low",
+                    "price_page_type": "mock_page",
+                    "price_anomaly_status": "normal",
+                    "price_action_suggestion": "建议先重试价格采集。",
+                },
+            ]
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.get_monitor_targets", _fake_targets)
+
+    anomaly_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "price_anomaly"},
+        "status": "processing",
+    }
+    anomaly_result = execute_action(anomaly_state)
+    assert anomaly_result["status"] == "succeeded"
+    assert "价格异常对象（共 1 个）" in anomaly_result["result_summary"]
+    assert "异常原因：当前价格超过 10000，疑似误提取" in anomaly_result["result_summary"]
+
+    low_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "low_confidence"},
+        "status": "processing",
+    }
+    low_result = execute_action(low_state)
+    assert low_result["status"] == "succeeded"
+    assert "低可信价格对象（共 2 个）" in low_result["result_summary"]
+
+    status_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "monitor_status"},
+        "status": "processing",
+    }
+    status_result = execute_action(status_state)
+    assert status_result["status"] == "succeeded"
+    assert "价格监控状态" in status_result["result_summary"]
+    assert "异常价格：1" in status_result["result_summary"]
+
+    overview_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "monitor_overview"},
+        "status": "processing",
+    }
+    overview_result = execute_action(overview_state)
+    assert overview_result["status"] == "succeeded"
+    assert "建议：" in overview_result["result_summary"]
 
 
 def test_execute_retry_price_probes_summary(monkeypatch):

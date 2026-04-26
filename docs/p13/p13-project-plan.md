@@ -1,48 +1,65 @@
-# P13-G 开发主线文档
+# P13-I 开发主线文档
 
 ## 阶段名称
 
-P13-G：价格采集失败治理轻量版
+P13-I：价格可信度与异常检测最小版
 
 ## 一、阶段背景
 
-P13-F 已经完成真实页面价格提取最小预演：
+P13-F 已经让系统具备真实页面价格提取能力。
 
-- B 侧支持 html_extract_preview
-- Hush Home 样本可提取 1280.0
-- 提取失败可 fallback 到 mock_price
-- 批量刷新通过 timeout / budget / fallback 避免拖垮整批刷新
+P13-G 已经让系统能记录采集状态和失败原因。
 
-但真实网页价格采集天然不稳定。
+P13-H 已经让系统能对失败 / fallback / mock 对象进行手动重试。
 
-如果后续要做主动通知、价格告警、阈值规则，就必须先知道：
+现在系统已经能回答：
 
 ```text
-当前价格到底来自真实页面，还是 fallback？
+是否采集成功？
 失败原因是什么？
-哪些对象仍然没有真实价格？
+是否能重试？
 ```
 
-所以 P13-G 只做一件事：
+但还缺少一个关键判断：
 
-采集状态与失败原因治理。
+```text
+这个价格值本身是否可信？
+这个页面类型是否适合做价格监控？
+这个价格变化是否异常？
+```
+
+例如：
+
+```text
+1280 → 15020
+20 → 500
+Amazon 榜单页提取到某个价格
+文章页提取到价格
+mock_price 连续变化
+```
+
+这些都不应该被系统当成稳定可信的业务价格。
+
+所以 P13-I 只做：
+
+价格可信度与异常检测最小版。
 
 ## 二、本轮唯一目标
 
 只做：
 
-记录、返回并展示价格采集状态。
+```text
+价格可信度 + 页面类型 + 异常检测 + 一句轻量建议
+```
 
 目标链路：
 
 ```text
-刷新监控价格
-→ B 尝试 html price probe
-→ 成功：price_probe_status=success，price_source=html_extract_preview
-→ 失败 fallback：price_probe_status=fallback_mock，price_probe_error=timeout/no_price_found/...
-→ 完全失败：price_probe_status=failed 或 unknown
-→ A 管理卡片展示采集状态
-→ A 可查询采集失败 / mock / 真实价格对象
+刷新监控价格 / 重试价格采集
+→ B 根据 price_source / probe_status / URL / page_type / delta 判断
+→ B 写入诊断字段
+→ A 管理卡片展示诊断字段
+→ A 可查询异常对象 / 低可信对象 / 价格监控状态
 ```
 
 ## 三、A/B 双仓分工
@@ -51,311 +68,316 @@ P13-F 已经完成真实页面价格提取最小预演：
 
 职责：
 
-- 展示 B 返回的采集状态
-- 展示采集失败原因
-- 提供简单查询命令
-- 不抓网页
-- 不解析 HTML
-- 不判断价格真假
-- 不做主动通知
+- 展示 B 返回的可信度与异常字段
+- 查询异常对象
+- 查询低可信对象
+- 展示价格监控状态摘要
+- 不重新计算可信度
+- 不重新判断异常
+- 不生成复杂决策建议
 
 ### B 项目：Ecom-Watch-Agent-Agent
 
 职责：
 
-- 在 monitor target 上记录 probe 状态
-- 在 run item 中记录 probe 状态
-- 返回采集状态字段
-- 保留 P13-F 的真实提取与 fallback
-- 保留 P13-A/B/C/D/E 链路
+- 判断页面类型
+- 判断价格可信度
+- 判断异常价格
+- 生成轻量建议
+- 写入或返回诊断字段
+- 保留 P13-A 到 P13-H 既有链路
 
-## 四、B 项目最小字段
+## 四、B 项目最小诊断字段
 
 建议在 product / monitor target 上增加：
 
 ```text
-price_probe_status
-price_probe_error
-price_probe_checked_at
-price_probe_raw_text
+price_confidence
+price_page_type
+price_anomaly_status
+price_anomaly_reason
+price_action_suggestion
 ```
 
-最低必须有：
+字段语义：
+
+### price_confidence
 
 ```text
-price_probe_status
-price_probe_error
-price_probe_checked_at
-```
-
-建议状态值：
-
-```text
-success
-fallback_mock
-failed
+high
+medium
+low
 unknown
 ```
 
-建议错误值：
+建议规则：
 
 ```text
-timeout
-no_price_found
-http_error
-parse_error
-budget_exceeded
+html_extract_preview + success + product_detail → high
+html_extract_preview + success + unknown page type → medium
+html_extract_preview + success + listing_page/article_page → low
+mock_price / fallback_mock / failed / unknown → low
+```
+
+### price_page_type
+
+```text
+product_detail
+listing_page
+search_page
+article_page
+mock_page
 unknown
 ```
 
-说明：
+建议规则：
 
-- success：真实页面提取成功
-- fallback_mock：真实提取失败，但 mock_price 兜底成功
-- failed：没有可用价格
-- unknown：状态未知或未采集
+- URL 含 `/products/`、`/product/`、`/dp/` 可判为 product_detail
+- URL 含 `/search`、`s?k=`、`keyword=` 可判为 search_page
+- URL 含 `/bestsellers`、`/new-releases` 可判为 listing_page
+- URL 含 `article`、`zhihu`、`vocus`、`post` 可判为 article_page
+- URL 为 `mock://` 可判为 mock_page
+- 其他为 unknown
 
-## 五、B API 返回要求
-
-现有列表接口：
-
-```text
-GET /internal/monitor/targets
-```
-
-需要返回：
+### price_anomaly_status
 
 ```text
-price_probe_status
-price_probe_error
-price_probe_checked_at
-price_probe_raw_text
+normal
+suspected
+unknown
 ```
 
-现有 run detail：
+最小规则：
 
 ```text
-GET /internal/monitor/price-refresh-runs/{run_id}
+abs(price_delta_percent) >= 50 → suspected
+abs(price_delta) >= 500 → suspected
+current_price > 10000 → suspected
+price_source=mock_price 且 price_changed=true → suspected
+otherwise → normal
 ```
 
-run items 中需要返回：
+### price_anomaly_reason
+
+示例：
 
 ```text
-price_probe_status
-price_probe_error
+价格变化幅度超过 50%
+价格变化金额超过 500
+当前价格超过 10000，疑似误提取
+mock_price 出现价格变化，不应作为真实价格判断
 ```
 
-如有 raw_text，也可返回：
+### price_action_suggestion
+
+本轮只做一句轻量建议。
+
+示例：
 
 ```text
-price_probe_raw_text
+建议优先人工复查该对象价格来源。
+建议更换为商品详情页 URL。
+建议先重试价格采集。
+该价格可作为当前监控参考。
 ```
 
-## 六、A 项目展示要求
+## 五、A 项目展示要求
 
 ### 管理卡片
 
 “看看当前监控对象”中增加：
 
-成功时：
-
 ```text
-采集状态：success
-来源：html_extract_preview
+可信度：high / medium / low
+页面类型：product_detail / listing_page / article_page
+异常状态：normal / suspected
+异常原因：-
+建议：该价格可作为当前监控参考
 ```
 
-fallback 时：
+如果字段为空：
 
 ```text
-采集状态：fallback_mock
-采集原因：timeout
-来源：mock_price
-```
-
-失败时：
-
-```text
-采集状态：failed
-采集原因：no_price_found
-来源：unknown
+可信度：unknown
+页面类型：unknown
+异常状态：unknown
 ```
 
 ### 查询命令
 
-新增文本命令：
-
-```text
-查看价格采集失败
-查看采集失败对象
-查看mock价格对象
-查看真实价格对象
-```
-
-返回示例：
-
-```text
-价格采集失败对象（共 3 个）：
-
-1. XXX
-   对象ID：8
-   来源：mock_price
-   状态：fallback_mock
-   原因：timeout
-
-2. XXX
-   对象ID：12
-   来源：unknown
-   状态：failed
-   原因：no_price_found
-```
-
-真实价格对象：
-
-```text
-真实价格对象（共 5 个）：
-1. Hush Home® 深眠重力被
-   对象ID：6
-   当前价格：1280.0
-   来源：html_extract_preview
-```
-
-## 七、本轮允许做
-
-B 项目允许：
-
-1. 增加 probe 状态字段
-2. refresh_price 写入 probe 状态
-3. run item 写入 probe 状态
-4. list 返回 probe 状态
-5. run detail 返回 probe 状态
-6. 增加 B 测试
-
-A 项目允许：
-
-1. 管理卡片展示采集状态
-2. 新增采集状态查询命令
-3. BServiceClient 复用 monitor targets list
-4. execute_action 增加查询结果格式化
-5. 增加 A 测试
-6. 更新 README / docs / AGENTS
-
-## 八、本轮禁止做
-
-禁止：
-
-- 不做主动推送
-- 不做价格告警
-- 不做阈值规则
-- 不做自动重试
-- 不做失败重试队列
-- 不做复杂采集失败治理系统
-- 不做 Playwright
-- 不做浏览器渲染
-- 不做代理池
-- 不做站点适配规则库
-- 不做人工修正价格
-- 不做白名单 / 黑名单配置
-- 不做复杂失败报表
-- 不破坏 P13-A/B/C/D/E/F
-- 不破坏 P12 卡片交互
-- 不混入 P13-H/I/J
-
-## 九、推荐开发顺序
-
-### P13-G.0：B 侧 probe 信息锚定
-
-先检查 P13-F 是否已在 raw_payload 中保存 probe 信息。
-
-如果已有：
-
-- 尽量复用
-- 不重复设计
-
-如果没有：
-
-- 增加最小字段
-
-### P13-G.1：B 侧字段与返回
-
-让 product / monitor target 返回：
-
-```text
-price_probe_status
-price_probe_error
-price_probe_checked_at
-```
-
-可选：
-
-```text
-price_probe_raw_text
-```
-
-### P13-G.2：B 侧 run item 扩展
-
-让 refresh run item 也记录 probe 状态，方便追溯某次刷新采集情况。
-
-### P13-G.3：A 管理卡片展示
-
-“看看当前监控对象”中增加采集状态和失败原因。
-
-### P13-G.4：A 查询命令
-
 新增：
 
 ```text
-查看价格采集失败
-查看mock价格对象
-查看真实价格对象
+查看价格异常对象
+查看低可信价格对象
+查看价格监控状态
+价格监控概览
 ```
 
-本轮先做文本结果，不做新卡片。
+### 价格异常对象文案
 
-### P13-G.5：回归
+```text
+价格异常对象（共 2 个）：
+1. XXX
+   对象ID：9
+   当前价格：15020.0
+   上次价格：1280.0
+   异常状态：suspected
+   异常原因：当前价格超过 10000，疑似误提取
+   建议：建议优先人工复查该对象价格来源
+```
+
+### 低可信对象文案
+
+```text
+低可信价格对象（共 5 个）：
+1. XXX
+   对象ID：10
+   来源：mock_price
+   可信度：low
+   页面类型：search_page
+   建议：建议更换为商品详情页 URL
+```
+
+### 价格监控状态文案
+
+```text
+价格监控状态
+
+监控对象总数：13
+高可信价格：3
+中可信价格：2
+低可信价格：8
+异常价格：2
+mock/fallback：6
+
+建议：
+- 优先复查 2 个异常价格对象
+- 处理 8 个低可信对象
+- mock/fallback 对象不建议用于价格决策
+```
+
+## 六、本轮允许做
+
+B 项目允许：
+
+1. 增加诊断字段
+2. 页面类型判断
+3. 可信度判断
+4. 异常检测
+5. 轻量建议生成
+6. list / run detail 返回诊断字段
+7. 增加 B 测试
+
+A 项目允许：
+
+1. 管理卡片展示诊断字段
+2. 新增异常对象查询命令
+3. 新增低可信对象查询命令
+4. 新增价格监控状态命令
+5. 增加 A 测试
+6. 更新 README / docs / AGENTS
+
+## 七、本轮禁止做
+
+禁止：
+
+- 不做完整决策建议系统
+- 不做建议分级
+- 不做处理优先级系统
+- 不做阈值订阅
+- 不做主动推送
+- 不做复杂规则引擎
+- 不做 LLM 自动判断
+- 不做图表看板
+- 不做后台页面
+- 不做 Playwright
+- 不做浏览器渲染
+- 不做代理池
+- 不做站点规则库
+- 不做复杂页面解析系统
+- 不破坏 P13-A/B/C/D/E/F/G/H
+- 不破坏 P12 卡片交互
+- 不混入 P13-J
+
+## 八、推荐开发顺序
+
+### P13-I.0：B 侧字段锚定
+
+先确认当前 product/list/run item 中已有字段。
+
+不要重复设计已有的 probe 字段。
+
+### P13-I.1：B 增加诊断函数
+
+建议新增轻量函数：
+
+```text
+classify_price_page_type(url)
+evaluate_price_confidence(...)
+detect_price_anomaly(...)
+build_price_action_suggestion(...)
+```
+
+### P13-I.2：B 集成 refresh / retry
+
+在 refresh_price 和 retry 结束后写入诊断字段。
+
+### P13-I.3：A 展示字段
+
+管理卡片展示诊断字段。
+
+### P13-I.4：A 查询命令
+
+新增异常 / 低可信 / 状态概览查询。
+
+### P13-I.5：回归
 
 必须回归：
 
-- P13-F Hush Home 提取
+- P13-H 重试
+- P13-G 采集状态查询
+- P13-F 真实价格提取
 - P13-E 定时刷新
 - P13-D run 查询
 - P13-B 价格历史
-- P13-C 变化摘要
 - P12 卡片交互
 
-## 十、通过标准
+## 九、通过标准
 
-P13-G 通过条件：
+P13-I 通过条件：
 
-- B 能记录 price_probe_status
-- B 能记录 price_probe_error
-- B 能记录 price_probe_checked_at
-- B list 返回 probe 状态
-- B run detail 返回 probe 状态
-- A 管理卡片展示采集状态
-- A 查询 failed / fallback / true html 对象可用
-- P13-F 真实价格提取不退化
-- P13-E 定时刷新不退化
-- P13-A/B/C/D 不退化
+- B 能输出 price_confidence
+- B 能输出 price_page_type
+- B 能输出 price_anomaly_status
+- B 能输出 price_anomaly_reason
+- B 能输出 price_action_suggestion
+- A 管理卡片展示诊断字段
+- A 可查询异常价格对象
+- A 可查询低可信对象
+- A 可查看价格监控状态
+- P13-H 不退化
+- P13-A/B/C/D/E/F/G 不退化
 - P12 不退化
 - A/B 分别测试通过
 - A/B 分别提交
 
-## 十一、提交边界
+## 十、提交边界
 
 B 项目允许提交：
 
-- product / schema / service / run item / tests 中与 probe 状态有关的最小改动
+- product / schema / service / tests 中与诊断字段有关的最小改动
 
 A 项目允许提交：
 
-- 卡片展示采集状态
+- 卡片展示
 - 查询命令
-- P13-G 测试
+- P13-I 测试
 - docs / README / AGENTS 阶段说明
 
 禁止混入：
 
-- P13-H 主动通知
-- P13-I 阈值提醒
-- P13-J 采集重试治理
+- P13-J 决策建议增强
+- 主动通知
+- 阈值订阅
 - 无关重构

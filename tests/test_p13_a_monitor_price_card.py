@@ -86,3 +86,33 @@ def test_monitor_targets_card_probe_fields() -> None:
     assert "采集状态：fallback_mock" in text
     assert "采集原因：timeout" in text
     assert "采集时间：2026-04-26 10:01" in text
+
+
+def test_monitor_targets_card_diagnostic_fields() -> None:
+    card = build_monitor_targets_card(
+        targets=[
+            {
+                "target_id": 4,
+                "name": "商品D",
+                "status": "active",
+                "url": "https://example.com/d",
+                "current_price": 15020,
+                "last_price": 1280,
+                "price_delta": 13740,
+                "price_delta_percent": 1073.44,
+                "price_changed": True,
+                "price_source": "html_extract_preview",
+                "price_confidence": "low",
+                "price_page_type": "listing_page",
+                "price_anomaly_status": "suspected",
+                "price_anomaly_reason": "当前价格超过 10000，疑似误提取",
+                "price_action_suggestion": "建议优先人工复查该对象价格来源。",
+            }
+        ]
+    )
+    text = _collect_div_text(card)
+    assert "可信度：low" in text
+    assert "页面类型：listing_page" in text
+    assert "异常状态：suspected" in text
+    assert "异常原因：当前价格超过 10000，疑似误提取" in text
+    assert "建议：建议优先人工复查该对象价格来源。" in text

@@ -41,6 +41,10 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_probe_query(normalized_text)
 
+    # P13-I: query price diagnostics views.
+    if not intent_code:
+        intent_code, slots = try_match_b_monitor_diagnostics_query(normalized_text)
+
     # P13-H: retry failed/mock probe objects.
     if not intent_code:
         intent_code, slots = try_match_b_retry_price_probe(normalized_text)
@@ -133,6 +137,19 @@ def try_match_b_monitor_probe_query(text: str) -> tuple[str | None, dict]:
         return "ecom_watch.monitor_probe_query", {"query_type": "mock"}
     if any(keyword in text for keyword in real_keywords):
         return "ecom_watch.monitor_probe_query", {"query_type": "real"}
+    return None, {}
+
+
+def try_match_b_monitor_diagnostics_query(text: str) -> tuple[str | None, dict]:
+    mapping = {
+        "查看价格异常对象": "price_anomaly",
+        "查看低可信价格对象": "low_confidence",
+        "查看价格监控状态": "monitor_status",
+        "价格监控概览": "monitor_overview",
+    }
+    for keyword, query_type in mapping.items():
+        if keyword in text:
+            return "ecom_watch.monitor_diagnostics_query", {"query_type": query_type}
     return None, {}
 
 

@@ -658,62 +658,64 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-H：价格采集失败重试轻量版
+P13-I：价格可信度与异常检测最小版
 
 本轮是 A/B 双仓协同开发。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、老板交互层、重试命令入口与结果展示层。
+定位：飞书入口层、消息编排层、老板交互层、诊断查询与展示层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、HTML price probe、probe 状态、失败对象重试、run 留痕。
+定位：业务服务层，负责 monitor target、价格采集、可信度判断、页面类型识别、异常检测、轻量建议字段。
 
-P13-G 已完成：
-- B 侧能记录 price_probe_status / price_probe_error / price_probe_checked_at
-- B 侧 list / run detail 能返回 probe 状态
-- A 侧管理卡片能展示采集状态
-- A 侧能查询失败 / mock / 真实价格对象
+P13-H 已完成：
+- B 侧支持失败 / fallback / mock 对象手动重试
+- A 侧支持重试价格采集命令
+- A 侧能展示重试结果
+- P13-G 采集状态治理不退化
 
-本轮 P13-H 只做：
+本轮 P13-I 只做：
 
-价格采集失败重试轻量版。
+价格可信度与异常检测最小版。
 
 固定原则：
 
-- B 负责重试真实价格采集
-- A 不抓网页
-- A 不解析 HTML
-- A 不判断价格真假
-- A 只触发 B 重试并展示结果
-- 只重试 failed / fallback_mock / mock_price / unknown 对象
-- 不做自动重试队列
-- 不做定时重试
+- B 负责可信度判断与异常检测
+- A 不重新计算可信度
+- A 不重新判断异常
+- A 只展示 B 返回的诊断字段
+- 决策建议只做一行轻量建议，不做完整建议系统
+- 不做复杂规则引擎
 - 不做主动通知
 - 两个仓库分别测试、分别清点、分别提交
 - 提交顺序：先 B，后 A
 
 当前禁止：
 
-- 不做自动重试队列
-- 不做指数退避
-- 不做定时重试
-- 不做失败告警
+- 不做完整决策建议系统
+- 不做建议分级
+- 不做处理优先级系统
+- 不做阈值订阅
 - 不做主动推送
-- 不做阈值提醒
-- 不做代理池
+- 不做复杂规则引擎
+- 不做 LLM 自动判断
+- 不做图表看板
+- 不做后台页面
 - 不做 Playwright / 浏览器渲染
+- 不做代理池
 - 不做站点规则库
-- 不做复杂失败治理系统
-- 不破坏 P13-A/B/C/D/E/F/G
+- 不破坏 P13-A/B/C/D/E/F/G/H
 - 不破坏 P12 卡片交互层
 
-P13-H 最小通过标准：
+P13-I 最小通过标准：
 
-- B 能重试单个对象价格采集
-- B 能批量重试 failed / fallback_mock / mock_price 对象
-- 重试成功能写 success / html_extract_preview
-- 重试失败能更新 probe_error / checked_at
-- 重试结果有 run 留痕或可追踪记录
-- A 能通过飞书触发重试
-- A 能展示成功 / 仍失败对象
-- P13-G 采集状态治理不退化
+- B 能输出 price_confidence
+- B 能输出 price_page_type
+- B 能输出 price_anomaly_status
+- B 能输出 price_anomaly_reason
+- B 能输出 price_action_suggestion
+- A 能展示价格可信度
+- A 能查询价格异常对象
+- A 能查询低可信价格对象
+- A 能查看价格监控状态摘要
+- P13-H 重试不退化

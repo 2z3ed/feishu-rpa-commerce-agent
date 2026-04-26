@@ -178,6 +178,11 @@ def _extract_monitor_target_minimal(item: dict) -> dict | None:
         "price_probe_error": item.get("price_probe_error"),
         "price_probe_checked_at": item.get("price_probe_checked_at"),
         "price_probe_raw_text": item.get("price_probe_raw_text"),
+        "price_confidence": item.get("price_confidence"),
+        "price_page_type": item.get("price_page_type"),
+        "price_anomaly_status": item.get("price_anomaly_status"),
+        "price_anomaly_reason": item.get("price_anomaly_reason"),
+        "price_action_suggestion": item.get("price_action_suggestion"),
     }
 
 
@@ -492,6 +497,25 @@ def execute_action(state: dict) -> dict:
             state["selected_backend"] = "httpx_b_service"
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p13g_probe_query_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
+        elif intent_code == "ecom_watch.monitor_diagnostics_query":
+            query_type = str(slots.get("query_type") or "monitor_status").strip().lower()
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_monitor_diagnostics_query_result(result, query_type=query_type)
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.diagnostics_query"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13i_diagnostics_query_chain"
             state["client_profile"] = "b_service_client"
             state["action_executed_detail"] = result
 
@@ -1418,6 +1442,107 @@ def format_b_monitor_probe_query_result(data: dict, *, query_type: str) -> str:
         )
     if len(matched) > 10:
         lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+    return "\n".join(lines)
+
+
+def format_b_monitor_diagnostics_query_result(data: dict, *, query_type: str) -> str:
+    raw_targets = data.get("targets")
+    if not isinstance(raw_targets, list):
+        raw_targets = data.get("items") if isinstance(data.get("items"), list) else []
+    targets = [item for item in raw_targets if isinstance(item, dict)]
+
+    def _pid(item: dict):
+        return item.get("id") or item.get("product_id") or item.get("target_id") or "-"
+
+    def _name(item: dict) -> str:
+        return str(item.get("name") or item.get("product_name") or "未命名对象")
+
+    def _line_price(value) -> str:
+        return "-" if value is None else str(value)
+
+    safe_query_type = query_type if query_type in {
+        "price_anomaly",
+        "low_confidence",
+        "monitor_status",
+        "monitor_overview",
+    } else "monitor_status"
+
+    if safe_query_type == "price_anomaly":
+        matched = [t for t in targets if str(t.get("price_anomaly_status") or "unknown").strip().lower() == "suspected"]
+        lines = [f"价格异常对象（共 {len(matched)} 个）："]
+        if not matched:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(matched[:10], start=1):
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   当前价格：{_line_price(item.get('current_price'))}",
+                    f"   上次价格：{_line_price(item.get('last_price'))}",
+                    f"   异常状态：{str(item.get('price_anomaly_status') or 'unknown')}",
+                    f"   异常原因：{str(item.get('price_anomaly_reason') or '-')}",
+                    f"   建议：{str(item.get('price_action_suggestion') or '-')}",
+                ]
+            )
+        if len(matched) > 10:
+            lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    if safe_query_type == "low_confidence":
+        matched = [
+            t for t in targets
+            if str(t.get("price_confidence") or "unknown").strip().lower() in {"low", "unknown"}
+        ]
+        lines = [f"低可信价格对象（共 {len(matched)} 个）："]
+        if not matched:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(matched[:10], start=1):
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   来源：{str(item.get('price_source') or 'unknown')}",
+                    f"   可信度：{str(item.get('price_confidence') or 'unknown')}",
+                    f"   页面类型：{str(item.get('price_page_type') or 'unknown')}",
+                    f"   建议：{str(item.get('price_action_suggestion') or '-')}",
+                ]
+            )
+        if len(matched) > 10:
+            lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    high = sum(1 for t in targets if str(t.get("price_confidence") or "unknown").strip().lower() == "high")
+    medium = sum(1 for t in targets if str(t.get("price_confidence") or "unknown").strip().lower() == "medium")
+    low = sum(1 for t in targets if str(t.get("price_confidence") or "unknown").strip().lower() == "low")
+    suspected = sum(1 for t in targets if str(t.get("price_anomaly_status") or "unknown").strip().lower() == "suspected")
+    mock_or_fallback = sum(
+        1
+        for t in targets
+        if str(t.get("price_source") or "").strip().lower() == "mock_price"
+        or str(t.get("price_probe_status") or "").strip().lower() == "fallback_mock"
+    )
+    lines = [
+        "价格监控状态",
+        "",
+        f"监控对象总数：{len(targets)}",
+        f"高可信价格：{high}",
+        f"中可信价格：{medium}",
+        f"低可信价格：{low}",
+        f"异常价格：{suspected}",
+        f"mock/fallback：{mock_or_fallback}",
+    ]
+    if safe_query_type == "monitor_overview":
+        lines.extend(
+            [
+                "",
+                "建议：",
+                f"- 优先复查 {suspected} 个异常价格对象",
+                f"- 处理 {low} 个低可信对象",
+                "- mock/fallback 对象不建议用于价格决策",
+            ]
+        )
     return "\n".join(lines)
 
 

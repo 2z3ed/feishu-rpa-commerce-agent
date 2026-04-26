@@ -30,6 +30,11 @@ def _normalize_target(item: dict) -> dict | None:
     price_probe_status = str(item.get("price_probe_status") or "unknown").strip().lower()
     price_probe_error = str(item.get("price_probe_error") or "").strip().lower()
     price_probe_checked_at = item.get("price_probe_checked_at")
+    price_confidence = str(item.get("price_confidence") or "unknown").strip().lower() or "unknown"
+    price_page_type = str(item.get("price_page_type") or "unknown").strip().lower() or "unknown"
+    price_anomaly_status = str(item.get("price_anomaly_status") or "unknown").strip().lower() or "unknown"
+    price_anomaly_reason = str(item.get("price_anomaly_reason") or "").strip()
+    price_action_suggestion = str(item.get("price_action_suggestion") or "").strip()
     return {
         "target_id": target_id,
         "name": name,
@@ -45,6 +50,11 @@ def _normalize_target(item: dict) -> dict | None:
         "price_probe_status": price_probe_status or "unknown",
         "price_probe_error": price_probe_error or None,
         "price_probe_checked_at": price_probe_checked_at,
+        "price_confidence": price_confidence,
+        "price_page_type": price_page_type,
+        "price_anomaly_status": price_anomaly_status,
+        "price_anomaly_reason": price_anomaly_reason or None,
+        "price_action_suggestion": price_action_suggestion or None,
     }
 
 
@@ -147,6 +157,11 @@ def build_monitor_targets_card(
                 if not price_changed and price_delta is None:
                     change_line = "暂无变化数据"
             probe_checked_line = probe_checked_at or checked_line
+            confidence_line = str(target.get("price_confidence") or "unknown")
+            page_type_line = str(target.get("price_page_type") or "unknown")
+            anomaly_status_line = str(target.get("price_anomaly_status") or "unknown")
+            anomaly_reason_line = str(target.get("price_anomaly_reason") or "-")
+            suggestion_line = str(target.get("price_action_suggestion") or "-")
 
             elements.append(
                 {
@@ -167,6 +182,11 @@ def build_monitor_targets_card(
                                 f"- 采集状态：{probe_status}",
                                 f"- 采集时间：{probe_checked_line}",
                                 (f"- 采集原因：{probe_error}" if probe_error else "- 采集原因：-"),
+                                f"- 可信度：{confidence_line}",
+                                f"- 页面类型：{page_type_line}",
+                                f"- 异常状态：{anomaly_status_line}",
+                                f"- 异常原因：{anomaly_reason_line}",
+                                f"- 建议：{suggestion_line}",
                             ]
                         ),
                     },
