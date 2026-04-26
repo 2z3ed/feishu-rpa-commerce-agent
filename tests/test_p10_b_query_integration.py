@@ -65,6 +65,19 @@ def test_resolve_retry_price_probe_intents():
         assert out["slots"]["target_id"] == expected_id
 
 
+def test_resolve_replace_monitor_target_url_intent():
+    out = resolve_intent({"normalized_text": "替换监控对象URL 12 https://example.com/products/12"})
+    assert out["intent_code"] == "ecom_watch.replace_monitor_target_url"
+    assert out["slots"]["target_id"] == 12
+    assert out["slots"]["product_url"] == "https://example.com/products/12"
+
+
+def test_resolve_refresh_monitor_target_price_intent():
+    out = resolve_intent({"normalized_text": "重新采集对象 12"})
+    assert out["intent_code"] == "ecom_watch.refresh_monitor_target_price"
+    assert out["slots"]["target_id"] == 12
+
+
 def test_resolve_monitor_price_history_intent():
     state_1 = {"normalized_text": "查看价格历史 7"}
     out_1 = resolve_intent(state_1)
@@ -808,6 +821,56 @@ def test_execute_add_monitor_by_url_success(monkeypatch):
     assert "对象ID：99" in result["result_summary"]
 
 
+def test_execute_replace_monitor_target_url_success(monkeypatch):
+    def _fake_replace_url(self, target_id: int, product_url: str):
+        assert target_id == 12
+        assert product_url == "https://example.com/p/12"
+        return {
+            "target": {
+                "id": 12,
+                "product_url": product_url,
+                "price_confidence": "unknown",
+                "price_page_type": "unknown",
+            }
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.replace_monitor_target_url", _fake_replace_url)
+    state = {
+        "intent_code": "ecom_watch.replace_monitor_target_url",
+        "slots": {"target_id": 12, "product_url": "https://example.com/p/12"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "已更新监控对象 URL" in result["result_summary"]
+    assert "对象ID：12" in result["result_summary"]
+    assert "建议下一步：重新采集对象 12" in result["result_summary"]
+
+
+def test_execute_refresh_monitor_target_price_success(monkeypatch):
+    def _fake_refresh_target(self, target_id: int):
+        assert target_id == 12
+        return {
+            "target_id": 12,
+            "price_probe_status": "success",
+            "price_confidence": "high",
+            "price_page_type": "product_detail",
+        }
+
+    monkeypatch.setattr("app.clients.b_service_client.BServiceClient.refresh_monitor_target_price", _fake_refresh_target)
+    state = {
+        "intent_code": "ecom_watch.refresh_monitor_target_price",
+        "slots": {"target_id": 12},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "succeeded"
+    assert "已触发重新采集" in result["result_summary"]
+    assert "对象ID：12" in result["result_summary"]
+    assert "可信度：high" in result["result_summary"]
+    assert "页面类型：product_detail" in result["result_summary"]
+
+
 def test_execute_discovery_search_success(monkeypatch):
     def _fake_discovery_search(self, query: str):
         assert query == "wireless headphone"
@@ -917,6 +980,42 @@ def test_execute_add_monitor_by_url_b_service_error(monkeypatch):
     result = execute_action(state)
     assert result["status"] == "failed"
     assert "加入监控失败" in result["result_summary"]
+
+
+def test_execute_replace_monitor_target_url_b_service_error(monkeypatch):
+    def _fake_replace_url_raise(self, _target_id: int, _product_url: str):
+        raise BServiceError("B 服务错误：target not found")
+
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.replace_monitor_target_url",
+        _fake_replace_url_raise,
+    )
+    state = {
+        "intent_code": "ecom_watch.replace_monitor_target_url",
+        "slots": {"target_id": 999, "product_url": "https://example.com/p/999"},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "替换URL失败" in result["result_summary"]
+
+
+def test_execute_refresh_monitor_target_price_b_service_error(monkeypatch):
+    def _fake_refresh_target_raise(self, _target_id: int):
+        raise BServiceError("B 服务错误：refresh failed")
+
+    monkeypatch.setattr(
+        "app.clients.b_service_client.BServiceClient.refresh_monitor_target_price",
+        _fake_refresh_target_raise,
+    )
+    state = {
+        "intent_code": "ecom_watch.refresh_monitor_target_price",
+        "slots": {"target_id": 12},
+        "status": "processing",
+    }
+    result = execute_action(state)
+    assert result["status"] == "failed"
+    assert "重新采集失败" in result["result_summary"]
 
 
 def test_execute_discovery_search_b_service_error(monkeypatch):

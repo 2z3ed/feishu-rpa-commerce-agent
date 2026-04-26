@@ -45,6 +45,14 @@ def resolve_intent(state: dict) -> dict:
     if not intent_code:
         intent_code, slots = try_match_b_monitor_diagnostics_query(normalized_text)
 
+    # P13-J: replace monitor target URL.
+    if not intent_code:
+        intent_code, slots = try_match_b_replace_monitor_target_url(normalized_text)
+
+    # P13-J: refresh single monitor target after URL replacement.
+    if not intent_code:
+        intent_code, slots = try_match_b_refresh_monitor_target_price(normalized_text)
+
     # P13-H: retry failed/mock probe objects.
     if not intent_code:
         intent_code, slots = try_match_b_retry_price_probe(normalized_text)
@@ -166,6 +174,35 @@ def try_match_b_retry_price_probe(text: str) -> tuple[str | None, dict]:
     batch_keywords = ("重试价格采集", "重试采集失败对象", "重试mock价格对象")
     if any(keyword in text for keyword in batch_keywords):
         return "ecom_watch.retry_price_probes", {}
+    return None, {}
+
+
+def try_match_b_replace_monitor_target_url(text: str) -> tuple[str | None, dict]:
+    patterns = (
+        r"^替换监控对象URL\s*(\d+)\s+(https?://\S+)$",
+        r"^替换对象URL\s*(\d+)\s+(https?://\S+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        return "ecom_watch.replace_monitor_target_url", {
+            "target_id": int(match.group(1)),
+            "product_url": match.group(2),
+        }
+    return None, {}
+
+
+def try_match_b_refresh_monitor_target_price(text: str) -> tuple[str | None, dict]:
+    patterns = (
+        r"^重新采集对象\s*(\d+)$",
+        r"^重新采集监控对象\s*(\d+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        return "ecom_watch.refresh_monitor_target_price", {"target_id": int(match.group(1))}
     return None, {}
 
 

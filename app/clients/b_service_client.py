@@ -72,6 +72,13 @@ class BServiceClient:
     def add_monitor_by_url(self, url: str) -> dict[str, Any]:
         return self._post_envelope_data("/internal/monitor/add-by-url", {"url": url})
 
+    def replace_monitor_target_url(self, target_id: int | str, product_url: str) -> dict[str, Any]:
+        return self._request_envelope_data(
+            method="PATCH",
+            path=f"/internal/monitor/{int(target_id)}/url",
+            json_payload={"product_url": product_url},
+        )
+
     def discovery_search(self, query: str) -> dict[str, Any]:
         return self._post_envelope_data("/internal/discovery/search", {"query": query})
 

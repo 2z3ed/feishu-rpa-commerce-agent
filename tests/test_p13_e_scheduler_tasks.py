@@ -22,6 +22,22 @@ def test_b_service_client_refresh_monitor_prices_supports_trigger_source(monkeyp
     assert captured["payload"] == {}
 
 
+def test_b_service_client_replace_monitor_target_url_uses_patch(monkeypatch):
+    captured: dict = {}
+
+    def _fake_request(self, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return {"target_id": 12}
+
+    monkeypatch.setattr(BServiceClient, "_request_envelope_data", _fake_request)
+    client = BServiceClient(base_url="http://example.com")
+    out = client.replace_monitor_target_url(12, "https://example.com/p/12")
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "/internal/monitor/12/url"
+    assert captured["json_payload"] == {"product_url": "https://example.com/p/12"}
+    assert out["target_id"] == 12
+
+
 def test_schedule_refresh_monitor_prices_calls_b_with_scheduled(monkeypatch):
     called: dict = {}
 

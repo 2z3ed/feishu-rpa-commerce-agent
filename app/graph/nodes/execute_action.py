@@ -519,6 +519,55 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "b_service_client"
             state["action_executed_detail"] = result
 
+        elif intent_code == "ecom_watch.replace_monitor_target_url":
+            target_id = slots.get("target_id")
+            product_url = str(slots.get("product_url") or "").strip()
+            if target_id is None:
+                raise ValueError("缺少 target_id")
+            if not product_url:
+                raise ValueError("缺少 product_url")
+            b_client = BServiceClient()
+            result = b_client.replace_monitor_target_url(int(target_id), product_url)
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_replace_monitor_target_url_result(
+                result,
+                target_id=int(target_id),
+                product_url=product_url,
+            )
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.replace_url"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_update_url_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13j_replace_url_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
+        elif intent_code == "ecom_watch.refresh_monitor_target_price":
+            target_id = slots.get("target_id")
+            if target_id is None:
+                raise ValueError("缺少 target_id")
+            b_client = BServiceClient()
+            result = b_client.refresh_monitor_target_price(int(target_id))
+            state["status"] = "succeeded"
+            state["result_summary"] = format_b_refresh_monitor_target_price_result(result, int(target_id))
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.refresh_target_price"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_refresh_price_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p13j_refresh_single_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = result
+
         elif intent_code == "ecom_watch.retry_price_probe":
             target_id = slots.get("target_id")
             if target_id is None:
@@ -1265,6 +1314,10 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"操作失败：{str(e)}"
             elif intent_code == "ecom_watch.refresh_monitor_prices":
                 state["result_summary"] = f"刷新失败：{str(e)}"
+            elif intent_code == "ecom_watch.replace_monitor_target_url":
+                state["result_summary"] = f"替换URL失败：{str(e)}"
+            elif intent_code == "ecom_watch.refresh_monitor_target_price":
+                state["result_summary"] = f"重新采集失败：{str(e)}"
             elif intent_code in ("ecom_watch.retry_price_probe", "ecom_watch.retry_price_probes"):
                 state["result_summary"] = f"重试失败：{str(e)}"
             else:
@@ -1865,6 +1918,38 @@ def format_b_add_monitor_by_url_result(data: dict, url: str) -> str:
         lines.append(f"- 对象ID：{target_id}")
     if status:
         lines.append(f"- 状态：{status}")
+    return "\n".join(lines)
+
+
+def format_b_replace_monitor_target_url_result(data: dict, *, target_id: int, product_url: str) -> str:
+    target = data.get("target") if isinstance(data.get("target"), dict) else None
+    source = target if isinstance(target, dict) else data
+    confidence = str(source.get("price_confidence") or "unknown")
+    page_type = str(source.get("price_page_type") or "unknown")
+    lines = [
+        "已更新监控对象 URL。",
+        f"- 对象ID：{target_id}",
+        f"- 新URL：{product_url}",
+        "- 已重置采集诊断字段（status/error/confidence/page_type）",
+        f"- 当前可信度：{confidence}",
+        f"- 当前页面类型：{page_type}",
+        f"- 建议下一步：重新采集对象 {target_id}",
+    ]
+    return "\n".join(lines)
+
+
+def format_b_refresh_monitor_target_price_result(data: dict, target_id: int) -> str:
+    source = data.get("target") if isinstance(data.get("target"), dict) else data
+    probe_status = str(source.get("price_probe_status") or "unknown")
+    confidence = str(source.get("price_confidence") or "unknown")
+    page_type = str(source.get("price_page_type") or "unknown")
+    lines = [
+        "已触发重新采集。",
+        f"- 对象ID：{target_id}",
+        f"- 采集状态：{probe_status}",
+        f"- 可信度：{confidence}",
+        f"- 页面类型：{page_type}",
+    ]
     return "\n".join(lines)
 
 
