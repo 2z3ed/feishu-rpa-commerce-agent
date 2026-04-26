@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-D：手动价格刷新任务留痕版
+P13-E：定时价格刷新任务轻量版
 
 本轮是 A/B 双仓协同开发。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、老板交互层、刷新结果展示与查询入口。
+定位：飞书入口层、消息编排层、Celery 调度控制层、老板交互层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格刷新、价格历史、刷新任务 run 留痕、刷新明细记录。
+定位：业务服务层，负责 monitor target、价格刷新、价格历史、刷新 run 留痕。
 
 P13-A 已完成：
 - B 侧 monitor target 已有价格字段
@@ -683,34 +683,41 @@ P13-C 已完成：
 - B 侧 refresh-prices 返回变化汇总
 - A 侧“刷新监控价格”返回老板可读变化摘要
 
-本轮 P13-D 只做：
+P13-D 已完成：
+- B 侧每次刷新生成 run_id
+- B 侧保存 refresh run / run items
+- A 侧刷新回复展示 run_id
+- A 侧支持按 run_id 查询刷新详情
 
-手动价格刷新任务留痕。
+本轮 P13-E 只做：
+
+定时价格刷新任务轻量版。
 
 固定原则：
 
-- A 可以调用 B
-- A 不吞 B
-- A 不保存刷新任务 run
-- A 不保存刷新明细
-- B 负责 refresh_run / refresh_run_items 的创建与查询
-- A 只负责展示 run_id 与查询 run 详情
+- A 是调度控制层
+- B 是价格刷新执行层
+- A 通过 Celery Beat 定时调用 B
+- B 只增强 trigger_source 记录
+- 不让 B 变成调度系统
+- 不做飞书主动推送
+- 不做告警规则
+- 不做复杂调度平台
 - 两个仓库分别测试、分别清点、分别提交
 - 提交顺序：先 B，后 A
 
 当前禁止：
 
-- 不做定时任务
-- 不做主动推送
-- 不做阈值告警
+- 不做飞书主动推送
+- 不做价格告警
+- 不做阈值规则
+- 不做用户订阅
+- 不做 cron UI
+- 不做复杂调度系统
 - 不做失败重试队列
-- 不做复杂调度
-- 不做价格图表
-- 不做后台管理页面
-- 不做大量历史报表
-- 不破坏 P13-A 价格刷新
-- 不破坏 P13-B 价格历史
-- 不破坏 P13-C 变化摘要
+- 不做任务优先级
+- 不做复杂并发控制
+- 不破坏 P13-A/B/C/D
 - 不破坏 P12 卡片交互层
 
 开始任何开发前，必须先阅读：
@@ -720,29 +727,28 @@ A 项目：
 - README.md
 - docs/p13/p13-project-plan.md
 - docs/p13/P13-agent-prompt.md
+- app/workers/celery_app.py
+- app/tasks/ingress_tasks.py
 - app/clients/b_service_client.py
-- app/graph/nodes/resolve_intent.py
 - app/graph/nodes/execute_action.py
 - tests/test_p10_b_query_integration.py
-- tests/test_p13_a_monitor_price_card.py
 
 B 项目：
 - README 或项目主说明
-- app/models/product.py
-- app/models/price_snapshot.py
 - app/schemas/monitor_management.py
 - app/services/monitor_management_service.py
 - app/api/routes_internal_monitor.py
-- app/core/db.py
 - tests/test_monitor_management_api.py
 
-P13-D 最小通过标准：
+P13-E 最小通过标准：
 
-- B 每次 refresh-prices 生成 run_id
-- B 保存 refresh run summary
-- B 保存每个对象刷新明细
-- B 可通过 run_id 查询刷新详情
-- A 刷新监控价格回复展示 run_id
-- A 可通过 run_id 查询刷新详情
-- P13-A/B/C 不退化
+- B 支持 trigger_source=scheduled
+- B refresh run 正确记录 trigger_source
+- A 有 Celery 定时任务 schedule_refresh_monitor_prices
+- A 的 Celery Beat 注册每 5 分钟执行一次
+- 定时任务调用 B refresh-prices
+- 每次定时执行生成 run_id
+- run 可通过 P13-D 查询
+- 手动刷新不退化
+- P13-A/B/C/D 不退化
 - P12 交互不退化

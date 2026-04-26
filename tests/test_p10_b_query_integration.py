@@ -194,7 +194,8 @@ def test_build_monitor_targets_context_keeps_price_fields():
 
 
 def test_execute_refresh_monitor_prices_success(monkeypatch):
-    def _fake_refresh(self):
+    def _fake_refresh(self, trigger_source: str | None = None):
+        assert trigger_source == "manual_feishu"
         return {
             "run_id": "PRR-20260425-ABCD",
             "status": "succeeded",
@@ -247,7 +248,8 @@ def test_execute_refresh_monitor_prices_success(monkeypatch):
 
 
 def test_execute_refresh_monitor_prices_no_changes(monkeypatch):
-    def _fake_refresh(self):
+    def _fake_refresh(self, trigger_source: str | None = None):
+        assert trigger_source == "manual_feishu"
         return {
             "run_id": "PRR-20260425-ABCD",
             "status": "succeeded",
@@ -272,7 +274,8 @@ def test_execute_refresh_monitor_prices_no_changes(monkeypatch):
 
 
 def test_execute_refresh_monitor_prices_show_top_five(monkeypatch):
-    def _fake_refresh(self):
+    def _fake_refresh(self, trigger_source: str | None = None):
+        assert trigger_source == "manual_feishu"
         changed_items = []
         for i in range(1, 8):
             changed_items.append(

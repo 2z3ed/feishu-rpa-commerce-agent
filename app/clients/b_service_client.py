@@ -35,8 +35,12 @@ class BServiceClient:
     def refresh_monitor_target_price(self, target_id: int | str) -> dict[str, Any]:
         return self._post_envelope_data(f"/internal/monitor/{int(target_id)}/refresh-price", {})
 
-    def refresh_monitor_prices(self) -> dict[str, Any]:
-        return self._post_envelope_data("/internal/monitor/refresh-prices", {})
+    def refresh_monitor_prices(self, trigger_source: str | None = None) -> dict[str, Any]:
+        safe_trigger_source = str(trigger_source or "").strip()
+        path = "/internal/monitor/refresh-prices"
+        if safe_trigger_source:
+            path = f"{path}?trigger_source={safe_trigger_source}"
+        return self._post_envelope_data(path, {})
 
     def get_monitor_target_price_history(self, target_id: int | str, limit: int = 5) -> dict[str, Any]:
         safe_limit = int(limit) if int(limit) > 0 else 5

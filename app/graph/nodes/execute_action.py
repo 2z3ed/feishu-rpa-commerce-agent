@@ -474,7 +474,7 @@ def execute_action(state: dict) -> dict:
 
         elif intent_code == "ecom_watch.refresh_monitor_prices":
             b_client = BServiceClient()
-            result = b_client.refresh_monitor_prices()
+            result = b_client.refresh_monitor_prices(trigger_source="manual_feishu")
             state["status"] = "succeeded"
             state["result_summary"] = format_b_refresh_monitor_prices_result(result)
             state["platform"] = "ecom_watch"

@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -8,7 +9,7 @@ def create_celery_app() -> Celery:
         "feishu_rpa",
         broker=settings.CELERY_BROKER_URL,
         backend=settings.CELERY_RESULT_BACKEND,
-        include=["app.tasks.ingress_tasks"],
+        include=["app.tasks.ingress_tasks", "app.tasks.scheduler_tasks"],
     )
 
     celery_app.conf.update(
@@ -22,6 +23,12 @@ def create_celery_app() -> Celery:
         task_soft_time_limit=240,
         worker_prefetch_multiplier=1,
         worker_max_tasks_per_child=100,
+        beat_schedule={
+            "refresh-monitor-prices-every-5-minutes": {
+                "task": "app.tasks.scheduler_tasks.schedule_refresh_monitor_prices",
+                "schedule": crontab(minute="*/5"),
+            }
+        },
     )
 
     return celery_app

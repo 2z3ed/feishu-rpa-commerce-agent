@@ -1,115 +1,84 @@
-# P13-D 验收检查表
+# P13-E 验收检查表
 
 ## 一、范围检查
 
-- [ ] 当前阶段为 P13-D
+- [ ] 当前阶段为 P13-E
 - [ ] 当前是 A/B 双仓协同开发
-- [ ] 未做定时任务
-- [ ] 未做主动推送
-- [ ] 未做阈值告警
+- [ ] 未做飞书主动推送
+- [ ] 未做价格告警
+- [ ] 未做阈值规则
+- [ ] 未做用户订阅
+- [ ] 未做 cron UI
+- [ ] 未做复杂调度系统
 - [ ] 未做失败重试队列
-- [ ] 未做复杂调度
-- [ ] 未做价格图表
-- [ ] 未做后台管理页面
-- [ ] 未做 run 列表页面
-- [ ] 未混入 P13-E/F/G
+- [ ] 未做任务优先级
+- [ ] 未混入 P13-F/G/H
 
-## 二、B 项目 run 存储检查
+## 二、B 项目 trigger_source 检查
 
-- [ ] 有 price_refresh_runs 结构
-- [ ] 有 price_refresh_run_items 结构
-- [ ] refresh-prices 每次生成 run_id
-- [ ] run 保存 status
-- [ ] run 保存 total
-- [ ] run 保存 refreshed
-- [ ] run 保存 changed
-- [ ] run 保存 failed
-- [ ] run 保存 started_at
-- [ ] run 保存 finished_at
-- [ ] run 保存 duration_ms
-- [ ] run 保存 trigger_source
+- [ ] refresh-prices 支持 trigger_source
+- [ ] scheduled 可写入 run
+- [ ] manual_feishu 或默认手动来源不退化
+- [ ] run detail 可看到 trigger_source
+- [ ] P13-D run detail 不退化
+- [ ] P13-C changed_items 不退化
 
-## 三、B 项目 item 明细检查
+## 三、A 项目 Celery 任务检查
 
-- [ ] item 保存 run_id
-- [ ] item 保存 product_id
-- [ ] item 保存 product_name
-- [ ] item 保存 status
-- [ ] item 保存 current_price
-- [ ] item 保存 last_price
-- [ ] item 保存 price_delta
-- [ ] item 保存 price_delta_percent
-- [ ] item 保存 price_changed
-- [ ] item 保存 price_source
-- [ ] item 支持 error_message
-- [ ] item 保存 checked_at
+- [ ] 已新增 schedule_refresh_monitor_prices
+- [ ] 任务调用 B refresh-prices
+- [ ] 调用时传 trigger_source=scheduled
+- [ ] 任务日志包含 START
+- [ ] 任务日志包含 CALL B
+- [ ] 任务日志包含 RESULT
+- [ ] 异常时日志包含 FAILED
+- [ ] 不主动发送飞书消息
 
-## 四、B 项目 API 检查
+## 四、Celery Beat 检查
 
-- [ ] refresh-prices 返回 run_id
-- [ ] refresh-prices 返回 status
-- [ ] refresh-prices 保留 P13-C changed_items / items
-- [ ] GET /internal/monitor/price-refresh-runs/{run_id} 可用
-- [ ] run_id 不存在时返回 envelope error
-- [ ] run detail 返回 summary
-- [ ] run detail 返回 items
+- [ ] beat_schedule 中有 refresh-monitor-prices-every-5-minutes
+- [ ] schedule 为每 5 分钟
+- [ ] task name 与实际 task 注册一致
+- [ ] worker 能执行该 task
+- [ ] beat 能触发该 task
 
-## 五、A 项目命令检查
+## 五、回归检查
 
-- [ ] 刷新监控价格回复展示 run_id
-- [ ] 支持“查看刷新结果 PRR-xxx”
-- [ ] 支持“查看价格刷新批次 PRR-xxx”
-- [ ] 支持“查看刷新批次 PRR-xxx”
-- [ ] A 调 B run detail API
-- [ ] run 不存在时返回老板可读错误
+- [ ] 手动“刷新监控价格”仍可用
+- [ ] 手动刷新仍生成 run_id
+- [ ] 查看刷新结果 run_id 仍可用
+- [ ] 查看价格历史仍可用
+- [ ] 看看当前监控对象仍可用
+- [ ] P12 卡片按钮不退化
 
-## 六、A 项目展示检查
-
-- [ ] run detail 显示 run_id
-- [ ] run detail 显示 status
-- [ ] run detail 显示 total
-- [ ] run detail 显示 refreshed
-- [ ] run detail 显示 changed
-- [ ] run detail 显示 failed
-- [ ] run detail 显示 duration_ms
-- [ ] run detail 展示变化对象
-- [ ] 无变化对象时提示清楚
-
-## 七、回归检查
-
-- [ ] P13-A 刷新价格不退化
-- [ ] P13-B 价格历史不退化
-- [ ] P13-C 变化摘要不退化
-- [ ] P12-B 候选加入监控通过
-- [ ] P12-C 暂停 / 恢复通过
-- [ ] P12-D 查看更多通过
-- [ ] P12-F 删除二次确认通过
-
-## 八、测试检查
+## 六、测试检查
 
 B 项目：
 
 - [ ] pytest -q tests/test_monitor_management_api.py 通过
-- [ ] P13-D 新增 B 测试通过
+- [ ] P13-E 新增 B 测试通过
 
 A 项目：
 
 - [ ] pytest -q tests/test_p10_b_query_integration.py 通过
 - [ ] pytest -q tests/test_p13_a_monitor_price_card.py 通过
-- [ ] P13-D 新增 A 测试通过
+- [ ] P13-E 新增 A 测试通过
 - [ ] bash scripts/p12_regression_check.sh 通过
 
-## 九、实机验收
+## 七、实机验收
 
-- [ ] 飞书“刷新监控价格”返回 run_id
-- [ ] 飞书“查看刷新结果 run_id”成功
-- [ ] run detail summary 正确
-- [ ] run detail 变化对象正确
-- [ ] 不存在 run_id 返回可读错误
+- [ ] B 服务运行
+- [ ] Redis / broker 运行
+- [ ] worker 运行
+- [ ] beat 运行
+- [ ] 定时任务触发
+- [ ] 生成 run_id
+- [ ] 飞书可查询 run detail
+- [ ] 手动刷新回归通过
 - [ ] P13-B 回归通过
 - [ ] P12 回归通过
 
-## 十、提交检查
+## 八、提交检查
 
 - [ ] B 项目先提交
 - [ ] A 项目后提交
@@ -118,15 +87,17 @@ A 项目：
 - [ ] 两仓 git status 已复核
 - [ ] 两仓 git diff --stat 已复核
 
-## 十一、通过结论
+## 九、通过结论
 
-P13-D 通过条件：
+P13-E 通过条件：
 
-- [ ] B refresh run 留痕通过
-- [ ] B run detail API 通过
-- [ ] A 展示 run_id 通过
-- [ ] A run 查询通过
-- [ ] P13-A/B/C 回归通过
+- [ ] B trigger_source 通过
+- [ ] A Celery task 通过
+- [ ] Celery Beat 配置通过
+- [ ] 定时执行生成 run_id 通过
+- [ ] run detail 查询通过
+- [ ] 手动刷新不退化
+- [ ] P13-A/B/C/D 回归通过
 - [ ] P12 回归通过
 - [ ] A/B 分仓测试通过
 - [ ] A/B 分仓提交
