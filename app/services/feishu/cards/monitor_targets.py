@@ -35,6 +35,11 @@ def _normalize_target(item: dict) -> dict | None:
     price_anomaly_status = str(item.get("price_anomaly_status") or "unknown").strip().lower() or "unknown"
     price_anomaly_reason = str(item.get("price_anomaly_reason") or "").strip()
     price_action_suggestion = str(item.get("price_action_suggestion") or "").strip()
+    action_priority = str(item.get("action_priority") or "unknown").strip().lower() or "unknown"
+    action_category = str(item.get("action_category") or "unknown").strip().lower() or "unknown"
+    manual_review_required = bool(item.get("manual_review_required", False))
+    alert_candidate = bool(item.get("alert_candidate", False))
+    action_suggestion = str(item.get("action_suggestion") or "").strip()
     return {
         "target_id": target_id,
         "name": name,
@@ -55,6 +60,11 @@ def _normalize_target(item: dict) -> dict | None:
         "price_anomaly_status": price_anomaly_status,
         "price_anomaly_reason": price_anomaly_reason or None,
         "price_action_suggestion": price_action_suggestion or None,
+        "action_priority": action_priority,
+        "action_category": action_category,
+        "manual_review_required": manual_review_required,
+        "alert_candidate": alert_candidate,
+        "action_suggestion": action_suggestion or None,
     }
 
 
@@ -162,6 +172,11 @@ def build_monitor_targets_card(
             anomaly_status_line = str(target.get("price_anomaly_status") or "unknown")
             anomaly_reason_line = str(target.get("price_anomaly_reason") or "-")
             suggestion_line = str(target.get("price_action_suggestion") or "-")
+            action_priority_line = str(target.get("action_priority") or "unknown")
+            action_category_line = str(target.get("action_category") or "unknown")
+            manual_review_required_line = "是" if bool(target.get("manual_review_required", False)) else "否"
+            alert_candidate_line = "是" if bool(target.get("alert_candidate", False)) else "否"
+            action_suggestion_line = str(target.get("action_suggestion") or "-")
 
             elements.append(
                 {
@@ -187,6 +202,11 @@ def build_monitor_targets_card(
                                 f"- 异常状态：{anomaly_status_line}",
                                 f"- 异常原因：{anomaly_reason_line}",
                                 f"- 建议：{suggestion_line}",
+                                f"- 处理优先级：{action_priority_line}",
+                                f"- 处理类型：{action_category_line}",
+                                f"- 需人工接管：{manual_review_required_line}",
+                                f"- 提醒候选：{alert_candidate_line}",
+                                f"- 处理建议：{action_suggestion_line}",
                             ]
                         ),
                     },

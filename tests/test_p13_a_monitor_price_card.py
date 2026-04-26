@@ -107,6 +107,11 @@ def test_monitor_targets_card_diagnostic_fields() -> None:
                 "price_anomaly_status": "suspected",
                 "price_anomaly_reason": "当前价格超过 10000，疑似误提取",
                 "price_action_suggestion": "建议优先人工复查该对象价格来源。",
+                "action_priority": "high",
+                "action_category": "manual_review",
+                "manual_review_required": True,
+                "alert_candidate": False,
+                "action_suggestion": "当前价格疑似异常，不建议直接用于价格决策，建议人工复查。",
             }
         ]
     )
@@ -116,3 +121,8 @@ def test_monitor_targets_card_diagnostic_fields() -> None:
     assert "异常状态：suspected" in text
     assert "异常原因：当前价格超过 10000，疑似误提取" in text
     assert "建议：建议优先人工复查该对象价格来源。" in text
+    assert "处理优先级：high" in text
+    assert "处理类型：manual_review" in text
+    assert "需人工接管：是" in text
+    assert "提醒候选：否" in text
+    assert "处理建议：当前价格疑似异常，不建议直接用于价格决策，建议人工复查。" in text

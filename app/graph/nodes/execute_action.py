@@ -183,6 +183,11 @@ def _extract_monitor_target_minimal(item: dict) -> dict | None:
         "price_anomaly_status": item.get("price_anomaly_status"),
         "price_anomaly_reason": item.get("price_anomaly_reason"),
         "price_action_suggestion": item.get("price_action_suggestion"),
+        "action_priority": item.get("action_priority"),
+        "action_category": item.get("action_category"),
+        "manual_review_required": item.get("manual_review_required"),
+        "alert_candidate": item.get("alert_candidate"),
+        "action_suggestion": item.get("action_suggestion"),
     }
 
 
@@ -1518,6 +1523,10 @@ def format_b_monitor_diagnostics_query_result(data: dict, *, query_type: str) ->
         "low_confidence",
         "monitor_status",
         "monitor_overview",
+        "high_priority_actions",
+        "manual_review_required",
+        "alert_candidates",
+        "price_action_suggestions",
     } else "monitor_status"
 
     if safe_query_type == "price_anomaly":
@@ -1564,6 +1573,99 @@ def format_b_monitor_diagnostics_query_result(data: dict, *, query_type: str) ->
             )
         if len(matched) > 10:
             lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    if safe_query_type == "high_priority_actions":
+        matched = [
+            t for t in targets
+            if str(t.get("action_priority") or "unknown").strip().lower() == "high"
+        ]
+        lines = [f"高优先级处理对象（共 {len(matched)} 个）："]
+        if not matched:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(matched[:10], start=1):
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   优先级：{str(item.get('action_priority') or 'unknown')}",
+                    f"   类型：{str(item.get('action_category') or 'unknown')}",
+                    f"   建议：{str(item.get('action_suggestion') or '-')}",
+                ]
+            )
+        if len(matched) > 10:
+            lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    if safe_query_type == "manual_review_required":
+        matched = [t for t in targets if bool(t.get("manual_review_required", False))]
+        lines = [f"人工接管对象（共 {len(matched)} 个）："]
+        if not matched:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(matched[:10], start=1):
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   优先级：{str(item.get('action_priority') or 'unknown')}",
+                    f"   类型：{str(item.get('action_category') or 'unknown')}",
+                    f"   建议：{str(item.get('action_suggestion') or '-')}",
+                ]
+            )
+        if len(matched) > 10:
+            lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    if safe_query_type == "alert_candidates":
+        matched = [t for t in targets if bool(t.get("alert_candidate", False))]
+        lines = [f"提醒候选对象（共 {len(matched)} 个）："]
+        if not matched:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(matched[:10], start=1):
+            delta = item.get("price_delta")
+            delta_percent = item.get("price_delta_percent")
+            if delta is None:
+                change_line = "-"
+            else:
+                trend = "上涨" if float(delta) > 0 else ("下降" if float(delta) < 0 else "持平")
+                if delta_percent is None:
+                    change_line = f"{trend} {abs(float(delta))}"
+                else:
+                    change_line = f"{trend} {abs(float(delta))}（{float(delta_percent):+.2f}%）"
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   当前价：{_line_price(item.get('current_price'))}",
+                    f"   上次价：{_line_price(item.get('last_price'))}",
+                    f"   变化：{change_line}",
+                    f"   建议：{str(item.get('action_suggestion') or '-')}",
+                ]
+            )
+        if len(matched) > 10:
+            lines.append(f"还有 {len(matched) - 10} 个对象未展示。")
+        return "\n".join(lines)
+
+    if safe_query_type == "price_action_suggestions":
+        lines = [f"价格处理建议（共 {len(targets)} 个，展示前 10 个）："]
+        if not targets:
+            lines.append("无")
+            return "\n".join(lines)
+        for idx, item in enumerate(targets[:10], start=1):
+            lines.extend(
+                [
+                    f"{idx}. {_name(item)}",
+                    f"   对象ID：{_pid(item)}",
+                    f"   优先级：{str(item.get('action_priority') or 'unknown')}",
+                    f"   类型：{str(item.get('action_category') or 'unknown')}",
+                    f"   建议：{str(item.get('action_suggestion') or '-')}",
+                ]
+            )
+        if len(targets) > 10:
+            lines.append(f"还有 {len(targets) - 10} 个对象未展示。")
         return "\n".join(lines)
 
     high = sum(1 for t in targets if str(t.get("price_confidence") or "unknown").strip().lower() == "high")

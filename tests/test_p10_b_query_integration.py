@@ -42,6 +42,10 @@ def test_resolve_monitor_diagnostics_query_intent():
         "查看低可信价格对象": "low_confidence",
         "查看价格监控状态": "monitor_status",
         "价格监控概览": "monitor_overview",
+        "查看高优先级处理对象": "high_priority_actions",
+        "查看人工接管对象": "manual_review_required",
+        "查看提醒候选对象": "alert_candidates",
+        "查看价格处理建议": "price_action_suggestions",
     }
     for text, expected in cases.items():
         out = resolve_intent({"normalized_text": text})
@@ -313,6 +317,11 @@ def test_execute_monitor_diagnostics_queries(monkeypatch):
                     "price_anomaly_status": "suspected",
                     "price_anomaly_reason": "当前价格超过 10000，疑似误提取",
                     "price_action_suggestion": "建议优先人工复查该对象价格来源。",
+                    "action_priority": "high",
+                    "action_category": "manual_review",
+                    "manual_review_required": True,
+                    "alert_candidate": False,
+                    "action_suggestion": "当前价格疑似异常，不建议直接用于价格决策，建议人工复查。",
                 },
                 {
                     "id": 2,
@@ -324,6 +333,30 @@ def test_execute_monitor_diagnostics_queries(monkeypatch):
                     "price_page_type": "mock_page",
                     "price_anomaly_status": "normal",
                     "price_action_suggestion": "建议先重试价格采集。",
+                    "action_priority": "high",
+                    "action_category": "retry_probe",
+                    "manual_review_required": True,
+                    "alert_candidate": False,
+                    "action_suggestion": "建议先重试价格采集；若仍失败，再人工检查 URL 或页面结构。",
+                },
+                {
+                    "id": 3,
+                    "name": "商品C",
+                    "current_price": 900.0,
+                    "last_price": 1020.0,
+                    "price_delta": -120.0,
+                    "price_delta_percent": -11.76,
+                    "price_source": "html_extract_preview",
+                    "price_probe_status": "success",
+                    "price_confidence": "medium",
+                    "price_page_type": "product_detail",
+                    "price_anomaly_status": "normal",
+                    "price_action_suggestion": "该价格可作为当前监控参考。",
+                    "action_priority": "medium",
+                    "action_category": "alert_candidate",
+                    "manual_review_required": False,
+                    "alert_candidate": True,
+                    "action_suggestion": "价格变化较明显，可作为后续提醒候选。",
                 },
             ]
         }
@@ -367,6 +400,42 @@ def test_execute_monitor_diagnostics_queries(monkeypatch):
     overview_result = execute_action(overview_state)
     assert overview_result["status"] == "succeeded"
     assert "建议：" in overview_result["result_summary"]
+
+    high_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "high_priority_actions"},
+        "status": "processing",
+    }
+    high_result = execute_action(high_state)
+    assert high_result["status"] == "succeeded"
+    assert "高优先级处理对象（共 2 个）" in high_result["result_summary"]
+
+    manual_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "manual_review_required"},
+        "status": "processing",
+    }
+    manual_result = execute_action(manual_state)
+    assert manual_result["status"] == "succeeded"
+    assert "人工接管对象（共 2 个）" in manual_result["result_summary"]
+
+    alert_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "alert_candidates"},
+        "status": "processing",
+    }
+    alert_result = execute_action(alert_state)
+    assert alert_result["status"] == "succeeded"
+    assert "提醒候选对象（共 1 个）" in alert_result["result_summary"]
+
+    suggestion_state = {
+        "intent_code": "ecom_watch.monitor_diagnostics_query",
+        "slots": {"query_type": "price_action_suggestions"},
+        "status": "processing",
+    }
+    suggestion_result = execute_action(suggestion_state)
+    assert suggestion_result["status"] == "succeeded"
+    assert "价格处理建议（共 3 个，展示前 10 个）" in suggestion_result["result_summary"]
 
 
 def test_execute_retry_price_probes_summary(monkeypatch):

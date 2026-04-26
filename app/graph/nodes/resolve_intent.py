@@ -154,6 +154,10 @@ def try_match_b_monitor_diagnostics_query(text: str) -> tuple[str | None, dict]:
         "查看低可信价格对象": "low_confidence",
         "查看价格监控状态": "monitor_status",
         "价格监控概览": "monitor_overview",
+        "查看高优先级处理对象": "high_priority_actions",
+        "查看人工接管对象": "manual_review_required",
+        "查看提醒候选对象": "alert_candidates",
+        "查看价格处理建议": "price_action_suggestions",
     }
     for keyword, query_type in mapping.items():
         if keyword in text:
