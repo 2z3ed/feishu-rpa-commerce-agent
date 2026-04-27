@@ -658,110 +658,65 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P14-D：LLM 操作计划生成
+P14-Z：P14 LLM 智能增强层总收口文档
 
-本轮是 A 项目主导开发，B 项目原则上不改。
-
-A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、任务编排层、LLM 操作计划层、老板交互层。
-
-B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格采集、采集状态、可信度诊断、异常检测、URL 治理状态、决策建议字段生成。
+本轮只做文档收口，不做功能开发。
 
 P14-A 已完成并收口：
-- 规则未命中时可触发 LLM intent fallback
-- LLM fallback 有 allowlist
-- LLM fallback 有 confidence 阈值
-- 低置信度会返回澄清
+- LLM 意图解析 fallback
+- 规则未命中时触发 LLM intent fallback
+- 支持 allowlist / confidence / 低置信度澄清
 - system.confirm_task 不允许由 LLM fallback 生成
 - product.update_price 不绕过确认，只能进入 awaiting_confirmation
 - 飞书实机验收已通过
 
 P14-B 已完成并收口：
-- 新增 ecom_watch.monitor_summary
-- 支持价格监控总体总结
-- 支持监控健康度总结
-- 支持重点处理对象总结
-- 支持 summary_focus=overview / health_check / priority_targets
+- LLM 监控对象运营总结
+- 支持 overview / health_check / priority_targets
 - 支持 LLM provider 失败降级为规则摘要
-- 支持 llm_monitor_summary_* steps 留痕
 - 飞书实机验收已通过
 
 P14-C 已完成并收口：
-- 新增 ecom_watch.anomaly_explanation
-- 支持异常原因解释
-- 支持低可信对象解释
-- 支持 mock_price / fallback_mock 解释
-- 支持人工处理原因解释
-- 支持 explanation_focus=overview / low_confidence / mock_source / manual_review
+- LLM 异常原因解释
+- 支持 overview / low_confidence / mock_source / manual_review
 - 支持 LLM provider 失败降级为规则解释
-- 支持 llm_anomaly_explanation_* steps 留痕
 - 飞书实机验收已通过
 
-当前 P14-D 只做：
+P14-D 已完成并收口：
+- LLM 操作计划生成
+- 支持 overview / priority / manual_review_first / retry_url_mix
+- 支持 LLM provider 失败降级为规则计划
+- 飞书实机验收已通过
 
-LLM 操作计划生成。
+当前 P14-Z 只做：
+
+P14 总收口文档。
+
+建议新增文档：
+
+docs/p14/p14-closure-summary.md
 
 固定原则：
 
-- A 负责识别操作计划类 intent
-- A 负责调用 B 获取已有监控对象、诊断字段、决策建议字段
-- A 负责组织 action plan 输入
-- A 负责调用 LLM 生成老板可读操作计划
-- B 负责生成采集状态、价格可信度、异常状态、异常原因、决策建议字段
-- LLM 只生成计划，不自动执行
-- LLM 不重新计算 B 的业务字段
-- LLM 不自动刷新
-- LLM 不自动重试
-- LLM 不自动替换 URL
-- LLM 不自动删除对象
-- LLM 不自动改价
-- LLM 不触发 RPA
-- LLM 失败时必须降级为规则计划或友好错误
+- 只写文档
+- 不改业务代码
+- 不改真实 .env
+- 不新增 P15
+- 不新增 OCR
+- 不重构 P14-A/B/C/D
+- 不删除历史文档
+- 不编造测试结果
+- 不编造飞书实机结果
+- 明确记录 P14 各阶段完成内容、环境变量、验收结论、未阻塞问题、后续建议
 
-本轮必须先读以下约束文件：
-
-1. docs/p14/p14d-project-plan.md
-2. docs/p14/P14D-agent-prompt.md
-3. docs/p14/p14d-boss-demo-sop.md
-4. docs/p14/p14d-acceptance-checklist.md
-
-如果以上文件不存在，先创建文档，不要直接开写业务代码。
-
-当前禁止：
+本轮禁止：
 
 - 不做 P15 OCR
 - 不做发票识别
-- 不做自动刷新
-- 不做自动重试
-- 不做自动替换 URL
-- 不做自动删除对象
-- 不做自动改价
-- 不做主动通知
-- 不做真正告警系统
-- 不做 Playwright / 浏览器渲染
-- 不做代理池
-- 不处理 Amazon 反爬
-- 不改 B 项目采集逻辑
-- 不重构 P14-A
-- 不重构 P14-B
-- 不重构 P14-C
-- 不破坏 P13-I 价格诊断字段
-- 不破坏 P13-K 决策建议字段
-- 不破坏 P12 卡片交互层
-
-P14-D 最小通过标准：
-
-- 能识别“这些异常商品下一步怎么处理 / 给我一个处理计划 / 低可信对象怎么处理”类命令
-- A 能获取监控对象、诊断字段、决策建议字段
-- LLM 能基于已有字段生成老板可读操作计划
-- 操作计划包含：处理顺序、对象分组、每组建议动作、人工确认点、不会自动执行提醒
-- LLM 不编造不存在的数据
-- LLM 不承诺自动处理
-- LLM 不直接执行任何计划步骤
-- LLM 失败时能降级为规则计划
-- task_steps 有 llm_action_plan_started / succeeded / failed / fallback_used 留痕
-- 不破坏 P14-A
-- 不破坏 P14-B
-- 不破坏 P14-C
-- 不破坏 P13-I / P13-K
+- 不改 resolve_intent.py
+- 不改 execute_action.py
+- 不改 LLM service
+- 不改测试
+- 不改 B 项目
+- 不删除 P14-A/B/C/D 文档
+- 不把真实 .env 加入 git
