@@ -15,6 +15,7 @@ _LLM_FALLBACK_INTENT_ALLOWLIST = frozenset(
     {
         "ecom_watch.monitor_targets",
         "ecom_watch.monitor_summary",
+        "ecom_watch.anomaly_explanation",
         "ecom_watch.summary_today",
         "ecom_watch.monitor_probe_query",
         "ecom_watch.monitor_diagnostics_query",
@@ -87,6 +88,10 @@ def resolve_intent(state: dict) -> dict:
     # P14-B: boss readable monitor summary.
     if not intent_code:
         intent_code, slots = try_match_b_monitor_summary(normalized_text)
+
+    # P14-C: anomaly explanation for boss-readable diagnostics.
+    if not intent_code:
+        intent_code, slots = try_match_b_anomaly_explanation(normalized_text)
 
     # P13-G: query monitor targets by probe status/source.
     if not intent_code:
@@ -285,6 +290,21 @@ def try_match_b_monitor_summary(text: str) -> tuple[str | None, dict]:
     )
     if any(keyword in text for keyword in summary_keywords):
         return "ecom_watch.monitor_summary", {}
+    return None, {}
+
+
+def try_match_b_anomaly_explanation(text: str) -> tuple[str | None, dict]:
+    explanation_keywords = (
+        "为什么这些商品价格不准",
+        "解释一下低可信对象的问题",
+        "为什么这个商品需要人工处理",
+        "为什么这些商品需要人工处理",
+        "这些异常是怎么来的",
+        "mock_price 是什么意思",
+        "fallback_mock 为什么不能直接用",
+    )
+    if any(keyword in text for keyword in explanation_keywords):
+        return "ecom_watch.anomaly_explanation", {}
     return None, {}
 
 

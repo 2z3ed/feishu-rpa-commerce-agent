@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     LLM_MONITOR_SUMMARY_PROVIDER: str = "mock"
     LLM_MONITOR_SUMMARY_MODEL: str = ""
     LLM_MONITOR_SUMMARY_TIMEOUT_SECONDS: int = 10
+    # P14-C: LLM anomaly explanation (default off).
+    ENABLE_LLM_ANOMALY_EXPLANATION: bool = False
+    LLM_ANOMALY_EXPLANATION_PROVIDER: str = "mock"
+    LLM_ANOMALY_EXPLANATION_MODEL: str = ""
+    LLM_ANOMALY_EXPLANATION_TIMEOUT_SECONDS: int = 10
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

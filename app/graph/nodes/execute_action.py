@@ -28,7 +28,9 @@ from app.rpa.confirm_update_price import (
 )
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
+from app.schemas.llm_anomaly_explanation import AnomalyExplanationInput, AnomalyExplanationStats
 from app.schemas.llm_monitor_summary import MonitorSummaryInput, MonitorSummaryStats
+from app.services.llm.anomaly_explanation import run_llm_anomaly_explanation
 from app.services.llm.monitor_summary import run_llm_monitor_summary
 from app.utils.task_logger import log_step
 from app.clients.b_service_client import BServiceClient, BServiceError
@@ -305,6 +307,58 @@ def _detect_monitor_summary_focus(text: str) -> str:
     if any(keyword in normalized for keyword in health_keywords):
         return "health_check"
 
+    return "overview"
+
+
+def _build_anomaly_explanation_input(*, targets_data: dict) -> AnomalyExplanationInput:
+    context = _build_monitor_targets_context(targets_data=targets_data)
+    targets = context.get("targets") if isinstance(context.get("targets"), list) else []
+
+    anomaly_count = 0
+    low_confidence_count = 0
+    failed_probe_count = 0
+    manual_review_count = 0
+
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        anomaly_status = str(item.get("price_anomaly_status") or "").strip().lower()
+        if anomaly_status in {"suspected", "anomaly", "abnormal"}:
+            anomaly_count += 1
+
+        confidence = str(item.get("price_confidence") or "").strip().lower()
+        if confidence in {"low", "unknown"}:
+            low_confidence_count += 1
+
+        probe_status = str(item.get("price_probe_status") or "").strip().lower()
+        if probe_status in {"failed", "fallback_mock"}:
+            failed_probe_count += 1
+
+        if bool(item.get("manual_review_required")):
+            manual_review_count += 1
+
+    return AnomalyExplanationInput(
+        stats=AnomalyExplanationStats(
+            target_count=len(targets),
+            anomaly_count=anomaly_count,
+            low_confidence_count=low_confidence_count,
+            failed_probe_count=failed_probe_count,
+            manual_review_count=manual_review_count,
+        ),
+        targets=targets,
+    )
+
+
+def _detect_anomaly_explanation_focus(text: str) -> str:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return "overview"
+    if "低可信" in normalized or "可信度" in normalized:
+        return "low_confidence"
+    if "人工处理" in normalized or "人工接管" in normalized:
+        return "manual_review"
+    if "mock_price" in normalized or "fallback_mock" in normalized:
+        return "mock_source"
     return "overview"
 
 
@@ -648,6 +702,109 @@ def execute_action(state: dict) -> dict:
                 "summary_focus": summary_focus,
                 "fallback_used": bool(summary_output.fallback_used),
                 "error": str(summary_output.error or "")[:120],
+            }
+
+        elif intent_code == "ecom_watch.anomaly_explanation":
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            explanation_input = _build_anomaly_explanation_input(targets_data=result)
+            explanation_focus = _detect_anomaly_explanation_focus(
+                state.get("normalized_text") or state.get("raw_text") or ""
+            )
+            explanation_input.explanation_focus = explanation_focus
+            stats = explanation_input.stats
+            log_step(
+                task_id,
+                "llm_anomaly_explanation_started",
+                "processing",
+                (
+                    f"provider={settings.LLM_ANOMALY_EXPLANATION_PROVIDER} "
+                    f"target_count={stats.target_count} "
+                    f"anomaly_count={stats.anomaly_count} "
+                    f"low_confidence_count={stats.low_confidence_count} "
+                    f"failed_probe_count={stats.failed_probe_count} "
+                    f"manual_review_count={stats.manual_review_count} "
+                    f"explanation_focus={explanation_focus}"
+                ),
+            )
+            explanation_output = run_llm_anomaly_explanation(explanation_input)
+            explanation_text = str(explanation_output.explanation_text or "").strip()
+            if not explanation_text:
+                explanation_text = "当前无法生成智能解释，但已获取到基础诊断信息。"
+
+            if explanation_output.fallback_used:
+                log_step(
+                    task_id,
+                    "llm_anomaly_explanation_failed",
+                    "failed",
+                    (
+                        f"provider={explanation_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"failed_probe_count={stats.failed_probe_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"explanation_focus={explanation_focus} "
+                        f"error={str(explanation_output.error or '')[:120]}"
+                    ),
+                )
+                log_step(
+                    task_id,
+                    "llm_anomaly_explanation_fallback_used",
+                    "success",
+                    (
+                        f"provider={explanation_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"explained_count={min(3, stats.target_count)} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"fallback_used=true "
+                        f"explanation_focus={explanation_focus} "
+                        f"explanation_length={len(explanation_text)}"
+                    ),
+                )
+            else:
+                log_step(
+                    task_id,
+                    "llm_anomaly_explanation_succeeded",
+                    "success",
+                    (
+                        f"provider={explanation_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"explained_count={min(3, stats.target_count)} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"fallback_used=false "
+                        f"explanation_focus={explanation_focus} "
+                        f"explanation_length={len(explanation_text)}"
+                    ),
+                )
+
+            state["status"] = "succeeded"
+            state["result_summary"] = explanation_text
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.anomaly_explanation"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p14c_anomaly_explanation_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = {
+                "provider": explanation_output.provider,
+                "target_count": stats.target_count,
+                "explained_count": min(3, stats.target_count),
+                "anomaly_count": stats.anomaly_count,
+                "low_confidence_count": stats.low_confidence_count,
+                "failed_probe_count": stats.failed_probe_count,
+                "manual_review_count": stats.manual_review_count,
+                "fallback_used": bool(explanation_output.fallback_used),
+                "explanation_focus": explanation_focus,
+                "explanation_length": len(explanation_text),
+                "error": str(explanation_output.error or "")[:120],
             }
 
         elif intent_code == "ecom_watch.monitor_probe_query":
@@ -1492,6 +1649,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"重试失败：{str(e)}"
             elif intent_code == "ecom_watch.monitor_summary":
                 state["result_summary"] = f"总结失败：{str(e)}"
+            elif intent_code == "ecom_watch.anomaly_explanation":
+                state["result_summary"] = f"解释失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"
