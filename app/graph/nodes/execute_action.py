@@ -332,9 +332,14 @@ def execute_action(state: dict) -> dict:
     state.setdefault("verify_mode", "none")
     
     if intent_code == "unknown":
+        clarification_question = str(state.get("clarification_question") or "").strip()
         state["error_message"] = "Unknown intent"
         state["status"] = "failed"
-        state["result_summary"] = "未识别到已知命令，请尝试其他表述方式"
+        state["result_summary"] = (
+            clarification_question
+            if clarification_question
+            else "未识别到已知命令，请尝试其他表述方式"
+        )
         logger.warning("Cannot execute unknown intent")
         return state
     

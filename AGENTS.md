@@ -658,64 +658,86 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P13-I：价格可信度与异常检测最小版
+P14-A：LLM 意图解析 fallback
 
-本轮是 A/B 双仓协同开发。
+本轮是 A 项目主导开发，B 项目原则上不改。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、老板交互层、诊断查询与展示层。
+定位：飞书入口层、消息编排层、任务编排层、LLM fallback 层、老板交互层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：业务服务层，负责 monitor target、价格采集、可信度判断、页面类型识别、异常检测、轻量建议字段。
+定位：业务服务层，负责 monitor target、价格采集、采集状态、可信度诊断、异常检测、URL 治理状态、决策建议字段生成。
 
-P13-H 已完成：
-- B 侧支持失败 / fallback / mock 对象手动重试
-- A 侧支持重试价格采集命令
-- A 侧能展示重试结果
-- P13-G 采集状态治理不退化
+P13 已完成：
+- P13-A：监控对象管理
+- P13-B：查询语义统一
+- P13-C：刷新结果摘要
+- P13-D：refresh run 留痕
+- P13-E：定时刷新
+- P13-F：HTML 价格采集
+- P13-G：采集状态治理
+- P13-H：手动重试
+- P13-I：价格诊断
+- P13-J：URL 替换 + 重采集闭环
+- P13-K：决策建议系统
 
-本轮 P13-I 只做：
+当前 P14-A 只做：
 
-价格可信度与异常检测最小版。
+LLM 意图解析 fallback。
 
 固定原则：
 
-- B 负责可信度判断与异常检测
-- A 不重新计算可信度
-- A 不重新判断异常
-- A 只展示 B 返回的诊断字段
-- 决策建议只做一行轻量建议，不做完整建议系统
-- 不做复杂规则引擎
-- 不做主动通知
-- 两个仓库分别测试、分别清点、分别提交
-- 提交顺序：先 B，后 A
+- 规则命中时，不调用 LLM
+- 规则未命中时，才调用 LLM fallback
+- LLM 只负责解析 intent / slots / confidence / clarification_question
+- LLM 不直接执行动作
+- LLM 不改数据
+- LLM 不替换 URL
+- LLM 不触发 RPA
+- LLM 不绕过确认链路
+- LLM 输出必须经过 allowlist 校验
+- LLM 输出必须经过 confidence 阈值校验
+- A 项目只把 LLM 解析结果接回现有安全链路
+- B 项目业务逻辑不因 P14-A 改动
+
+本轮必须先读以下约束文件：
+
+1. docs/p14/p14-project-plan.md
+2. docs/p14/P14-agent-prompt.md
+3. docs/p14/p14-boss-demo-sop.md
+4. docs/p14/p14-acceptance-checklist.md
+
+如果 docs/p14 目录不存在，先创建以上文档，不要直接开写业务代码。
 
 当前禁止：
 
-- 不做完整决策建议系统
-- 不做建议分级
-- 不做处理优先级系统
-- 不做阈值订阅
-- 不做主动推送
-- 不做复杂规则引擎
-- 不做 LLM 自动判断
-- 不做图表看板
-- 不做后台页面
+- 不做 P14-B 运营总结
+- 不做 P14-C 异常原因解释
+- 不做 P14-D 操作计划生成
+- 不做 P15 OCR
+- 不做发票识别
 - 不做 Playwright / 浏览器渲染
 - 不做代理池
-- 不做站点规则库
-- 不破坏 P13-A/B/C/D/E/F/G/H
+- 不处理 Amazon 反爬
+- 不自动修复 URL
+- 不自动删除监控对象
+- 不自动触发 RPA
+- 不自动生成并执行建议
+- 不新增复杂业务动作
+- 不改 B 项目采集逻辑
 - 不破坏 P12 卡片交互层
+- 不破坏 P13-A/B/C/D/E/F/G/H/I/J/K
 
-P13-I 最小通过标准：
+P14-A 最小通过标准：
 
-- B 能输出 price_confidence
-- B 能输出 price_page_type
-- B 能输出 price_anomaly_status
-- B 能输出 price_anomaly_reason
-- B 能输出 price_action_suggestion
-- A 能展示价格可信度
-- A 能查询价格异常对象
-- A 能查询低可信价格对象
-- A 能查看价格监控状态摘要
-- P13-H 重试不退化
+- 规则命中的旧命令仍走旧链路
+- 规则未命中的自然语言命令可以触发 LLM fallback
+- LLM 输出结构化 JSON
+- intent 必须在 allowlist 内
+- confidence 达标才允许进入现有链路
+- 低置信度时返回澄清问题
+- 非法 intent 不执行
+- 高风险 intent 不绕过确认
+- task_steps 能看到 LLM fallback 留痕
+- ENABLE_LLM_INTENT_FALLBACK=false 时系统完全保持旧行为
+- P12 / P13 回归不退化

@@ -5,7 +5,53 @@ Identifies the intent from the normalized text using rule-based matching.
 """
 import re
 from typing import Optional, Tuple, Dict, Any
+from app.core.config import settings
 from app.core.logging import logger
+from app.services.llm.intent_fallback import run_llm_intent_fallback
+from app.utils.task_logger import log_step
+
+
+_LLM_FALLBACK_INTENT_ALLOWLIST = frozenset(
+    {
+        "ecom_watch.monitor_targets",
+        "ecom_watch.summary_today",
+        "ecom_watch.monitor_probe_query",
+        "ecom_watch.monitor_diagnostics_query",
+        "ecom_watch.retry_price_probe",
+        "ecom_watch.retry_price_probes",
+        "ecom_watch.replace_monitor_target_url",
+        "ecom_watch.refresh_monitor_target_price",
+        "ecom_watch.refresh_monitor_prices",
+        "ecom_watch.monitor_price_history",
+        "ecom_watch.price_refresh_run_detail",
+        "ecom_watch.product_detail",
+        "ecom_watch.discovery_search",
+        "ecom_watch.add_monitor_by_url",
+        "ecom_watch.add_from_candidates",
+        "ecom_watch.manage_monitor_target",
+        "product.query_sku_status",
+        "product.update_price",
+    }
+)
+
+
+def _log_fallback_step(state: dict, step_code: str, step_status: str, detail: str) -> None:
+    task_id = str(state.get("task_id") or "").strip()
+    if not task_id:
+        return
+    log_step(task_id, step_code, step_status, detail[:500])
+
+
+def _fallback_skip_unknown(state: dict, reason: str) -> dict:
+    state["intent_code"] = "unknown"
+    state["slots"] = {}
+    _log_fallback_step(
+        state,
+        "llm_intent_fallback_skipped",
+        "success",
+        f"enabled={settings.ENABLE_LLM_INTENT_FALLBACK} provider={settings.LLM_INTENT_PROVIDER} reason={reason}",
+    )
+    return state
 
 
 def resolve_intent(state: dict) -> dict:
@@ -114,9 +160,98 @@ def resolve_intent(state: dict) -> dict:
         state["slots"] = slots
         logger.info("Intent resolved: intent_code=%s, slots=%s", intent_code, slots)
     else:
-        state["intent_code"] = "unknown"
-        state["slots"] = {}
-        logger.info("Unknown intent: text='%s'", normalized_text[:100])
+        if not settings.ENABLE_LLM_INTENT_FALLBACK:
+            state = _fallback_skip_unknown(state, reason="feature_disabled")
+            logger.info("Unknown intent (fallback disabled): text='%s'", normalized_text[:100])
+            return state
+
+        _log_fallback_step(
+            state,
+            "llm_intent_fallback_started",
+            "processing",
+            f"enabled=true provider={settings.LLM_INTENT_PROVIDER} text={normalized_text[:80]}",
+        )
+        try:
+            fallback = run_llm_intent_fallback(normalized_text)
+            fallback_intent = str(fallback.intent or "unknown").strip()
+            fallback_slots = fallback.slots if isinstance(fallback.slots, dict) else {}
+            confidence = float(fallback.confidence)
+            allowed = fallback_intent in _LLM_FALLBACK_INTENT_ALLOWLIST
+
+            if not allowed:
+                state["intent_code"] = "unknown"
+                state["slots"] = {}
+                state["clarification_question"] = (
+                    fallback.clarification_question
+                    or "我理解到一个不在白名单内的动作，请换一种说法。"
+                )
+                _log_fallback_step(
+                    state,
+                    "llm_intent_fallback_failed",
+                    "failed",
+                    f"intent={fallback_intent} confidence={confidence:.2f} allowed=false reason=intent_not_allowed",
+                )
+                logger.warning("LLM fallback blocked non-allowlist intent: %s", fallback_intent)
+                return state
+
+            if confidence < 0.5:
+                state["intent_code"] = "unknown"
+                state["slots"] = {}
+                state["clarification_question"] = (
+                    fallback.clarification_question
+                    or "我还不太确定你的意图，请补充你想查询或操作的对象。"
+                )
+                _log_fallback_step(
+                    state,
+                    "llm_intent_fallback_low_confidence",
+                    "success",
+                    f"intent={fallback_intent} confidence={confidence:.2f} threshold=0.5 reason=too_low",
+                )
+                return state
+
+            if confidence < float(settings.LLM_INTENT_CONFIDENCE_THRESHOLD):
+                state["intent_code"] = "unknown"
+                state["slots"] = {}
+                state["clarification_question"] = (
+                    fallback.clarification_question
+                    or "我还需要确认你的目标，请再具体说明。"
+                )
+                _log_fallback_step(
+                    state,
+                    "llm_intent_fallback_low_confidence",
+                    "success",
+                    (
+                        f"intent={fallback_intent} confidence={confidence:.2f} "
+                        f"threshold={settings.LLM_INTENT_CONFIDENCE_THRESHOLD}"
+                    ),
+                )
+                return state
+
+            state["intent_code"] = fallback_intent
+            state["slots"] = fallback_slots
+            state["llm_intent_confidence"] = confidence
+            state["llm_intent_reason"] = str(fallback.reason or "")
+            _log_fallback_step(
+                state,
+                "llm_intent_fallback_succeeded",
+                "success",
+                f"intent={fallback_intent} confidence={confidence:.2f} allowed=true",
+            )
+            logger.info(
+                "LLM fallback resolved intent: intent_code=%s confidence=%.2f",
+                fallback_intent,
+                confidence,
+            )
+        except Exception as exc:
+            state["intent_code"] = "unknown"
+            state["slots"] = {}
+            _log_fallback_step(
+                state,
+                "llm_intent_fallback_failed",
+                "failed",
+                f"provider={settings.LLM_INTENT_PROVIDER} error={str(exc)[:120]}",
+            )
+            logger.warning("LLM intent fallback failed: %s", exc)
     
     return state
 
@@ -129,7 +264,7 @@ def try_match_b_today_summary(text: str) -> tuple[str | None, dict]:
 
 
 def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
-    monitor_keywords = ("看看当前监控对象", "当前监控哪些商品", "监控列表")
+    monitor_keywords = ("看看当前监控对象", "查看当前监控对象", "当前监控哪些商品", "监控列表")
     if any(keyword in text for keyword in monitor_keywords):
         return "ecom_watch.monitor_targets", {}
     return None, {}

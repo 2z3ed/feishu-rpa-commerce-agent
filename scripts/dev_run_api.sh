@@ -12,4 +12,10 @@ if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
+if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

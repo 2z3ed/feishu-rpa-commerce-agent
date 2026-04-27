@@ -15,6 +15,12 @@ def test_resolve_monitor_targets_intent():
     assert out["intent_code"] == "ecom_watch.monitor_targets"
 
 
+def test_resolve_monitor_targets_intent_view_variant():
+    state = {"normalized_text": "查看当前监控对象"}
+    out = resolve_intent(state)
+    assert out["intent_code"] == "ecom_watch.monitor_targets"
+
+
 def test_resolve_refresh_monitor_prices_intent():
     for text in ("刷新监控价格", "刷新监控对象价格", "刷新价格"):
         state = {"normalized_text": text}

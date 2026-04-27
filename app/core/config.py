@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     FEISHU_BOT_OPEN_ID: str = ""
     B_SERVICE_BASE_URL: str = "http://127.0.0.1:8005"
 
+    # P14-A: LLM intent fallback (default off, only for rule-miss).
+    ENABLE_LLM_INTENT_FALLBACK: bool = False
+    LLM_INTENT_PROVIDER: str = "mock"
+    LLM_INTENT_MODEL: str = ""
+    LLM_INTENT_TIMEOUT_SECONDS: int = 8
+    LLM_INTENT_CONFIDENCE_THRESHOLD: float = 0.75
+
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False
     FEISHU_BITABLE_APP_TOKEN: str = ""
