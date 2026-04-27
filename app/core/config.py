@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     LLM_INTENT_MODEL: str = ""
     LLM_INTENT_TIMEOUT_SECONDS: int = 8
     LLM_INTENT_CONFIDENCE_THRESHOLD: float = 0.75
+    # P14-B: LLM monitor summary (default off).
+    ENABLE_LLM_MONITOR_SUMMARY: bool = False
+    LLM_MONITOR_SUMMARY_PROVIDER: str = "mock"
+    LLM_MONITOR_SUMMARY_MODEL: str = ""
+    LLM_MONITOR_SUMMARY_TIMEOUT_SECONDS: int = 10
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

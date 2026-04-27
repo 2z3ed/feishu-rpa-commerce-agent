@@ -28,6 +28,8 @@ from app.rpa.confirm_update_price import (
 )
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
+from app.schemas.llm_monitor_summary import MonitorSummaryInput, MonitorSummaryStats
+from app.services.llm.monitor_summary import run_llm_monitor_summary
 from app.utils.task_logger import log_step
 from app.clients.b_service_client import BServiceClient, BServiceError
 
@@ -249,6 +251,61 @@ def _load_latest_monitor_targets_context(*, chat_id: str, user_open_id: str) -> 
         return None
     finally:
         db.close()
+
+
+def _build_monitor_summary_input(*, targets_data: dict) -> MonitorSummaryInput:
+    context = _build_monitor_targets_context(targets_data=targets_data)
+    targets = context.get("targets") if isinstance(context.get("targets"), list) else []
+
+    anomaly_count = 0
+    low_confidence_count = 0
+    manual_review_count = 0
+    high_priority_count = 0
+
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        anomaly_status = str(item.get("price_anomaly_status") or "").strip().lower()
+        if anomaly_status in {"suspected", "anomaly", "abnormal"}:
+            anomaly_count += 1
+
+        confidence = str(item.get("price_confidence") or "").strip().lower()
+        if confidence in {"low", "unknown"}:
+            low_confidence_count += 1
+
+        if bool(item.get("manual_review_required")):
+            manual_review_count += 1
+
+        priority = str(item.get("action_priority") or "").strip().lower()
+        if priority == "high":
+            high_priority_count += 1
+
+    return MonitorSummaryInput(
+        stats=MonitorSummaryStats(
+            target_count=len(targets),
+            anomaly_count=anomaly_count,
+            low_confidence_count=low_confidence_count,
+            manual_review_count=manual_review_count,
+            high_priority_count=high_priority_count,
+        ),
+        targets=targets,
+    )
+
+
+def _detect_monitor_summary_focus(text: str) -> str:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return "overview"
+
+    priority_keywords = ("哪些", "重点处理", "需要处理", "人工接管", "优先处理")
+    if any(keyword in normalized for keyword in priority_keywords):
+        return "priority_targets"
+
+    health_keywords = ("整体", "怎么样", "健康", "状态")
+    if any(keyword in normalized for keyword in health_keywords):
+        return "health_check"
+
+    return "overview"
 
 
 def _apply_adjust_inventory_governance_baseline(state: dict, result: dict | None = None) -> None:
@@ -490,6 +547,108 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p10_query_chain"
             state["client_profile"] = "b_service_client"
+
+        elif intent_code == "ecom_watch.monitor_summary":
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            summary_input = _build_monitor_summary_input(targets_data=result)
+            summary_focus = _detect_monitor_summary_focus(
+                state.get("normalized_text") or state.get("raw_text") or ""
+            )
+            summary_input.summary_focus = summary_focus
+            stats = summary_input.stats
+            log_step(
+                task_id,
+                "llm_monitor_summary_started",
+                "processing",
+                (
+                    f"provider={settings.LLM_MONITOR_SUMMARY_PROVIDER} "
+                    f"target_count={stats.target_count} "
+                    f"anomaly_count={stats.anomaly_count} "
+                    f"low_confidence_count={stats.low_confidence_count} "
+                    f"manual_review_count={stats.manual_review_count} "
+                    f"high_priority_count={stats.high_priority_count} "
+                    f"summary_focus={summary_focus}"
+                ),
+            )
+            summary_output = run_llm_monitor_summary(summary_input)
+            summary_text = str(summary_output.summary_text or "").strip()
+            if not summary_text:
+                summary_text = "当前无法生成智能总结，但已获取到基础监控数据。"
+
+            if summary_output.fallback_used:
+                log_step(
+                    task_id,
+                    "llm_monitor_summary_failed",
+                    "failed",
+                    (
+                        f"provider={summary_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"summary_focus={summary_focus} "
+                        f"error={str(summary_output.error or '')[:120]}"
+                    ),
+                )
+                log_step(
+                    task_id,
+                    "llm_monitor_summary_fallback_used",
+                    "success",
+                    (
+                        f"provider={summary_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"summary_length={len(summary_text)} "
+                        f"summary_focus={summary_focus}"
+                    ),
+                )
+            else:
+                log_step(
+                    task_id,
+                    "llm_monitor_summary_succeeded",
+                    "success",
+                    (
+                        f"provider={summary_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"anomaly_count={stats.anomaly_count} "
+                        f"low_confidence_count={stats.low_confidence_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"summary_length={len(summary_text)} "
+                        f"summary_focus={summary_focus}"
+                    ),
+                )
+
+            state["status"] = "succeeded"
+            state["result_summary"] = summary_text
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.summary"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p14b_monitor_summary_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = {
+                "provider": summary_output.provider,
+                "target_count": stats.target_count,
+                "anomaly_count": stats.anomaly_count,
+                "low_confidence_count": stats.low_confidence_count,
+                "manual_review_count": stats.manual_review_count,
+                "high_priority_count": stats.high_priority_count,
+                "summary_length": len(summary_text),
+                "summary_focus": summary_focus,
+                "fallback_used": bool(summary_output.fallback_used),
+                "error": str(summary_output.error or "")[:120],
+            }
 
         elif intent_code == "ecom_watch.monitor_probe_query":
             query_type = str(slots.get("query_type") or "failed").strip().lower()
@@ -1161,6 +1320,7 @@ def execute_action(state: dict) -> dict:
                 pr = result.get("parsed_result")
                 if isinstance(pr, dict):
                     state["parsed_result"] = pr
+
                 state["result_summary"] = format_task_confirmation_result(result)
                 state["status"] = "succeeded"
                 # P6.1: If confirm executed a controlled provider write, reflect it in observable fields
@@ -1330,6 +1490,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"重新采集失败：{str(e)}"
             elif intent_code in ("ecom_watch.retry_price_probe", "ecom_watch.retry_price_probes"):
                 state["result_summary"] = f"重试失败：{str(e)}"
+            elif intent_code == "ecom_watch.monitor_summary":
+                state["result_summary"] = f"总结失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"

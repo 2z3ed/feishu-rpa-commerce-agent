@@ -14,6 +14,7 @@ from app.utils.task_logger import log_step
 _LLM_FALLBACK_INTENT_ALLOWLIST = frozenset(
     {
         "ecom_watch.monitor_targets",
+        "ecom_watch.monitor_summary",
         "ecom_watch.summary_today",
         "ecom_watch.monitor_probe_query",
         "ecom_watch.monitor_diagnostics_query",
@@ -82,6 +83,10 @@ def resolve_intent(state: dict) -> dict:
     # P10: query monitor targets from B service.
     if not intent_code:
         intent_code, slots = try_match_b_monitor_targets(normalized_text)
+
+    # P14-B: boss readable monitor summary.
+    if not intent_code:
+        intent_code, slots = try_match_b_monitor_summary(normalized_text)
 
     # P13-G: query monitor targets by probe status/source.
     if not intent_code:
@@ -267,6 +272,19 @@ def try_match_b_monitor_targets(text: str) -> tuple[str | None, dict]:
     monitor_keywords = ("看看当前监控对象", "查看当前监控对象", "当前监控哪些商品", "监控列表")
     if any(keyword in text for keyword in monitor_keywords):
         return "ecom_watch.monitor_targets", {}
+    return None, {}
+
+
+def try_match_b_monitor_summary(text: str) -> tuple[str | None, dict]:
+    summary_keywords = (
+        "总结一下当前价格监控情况",
+        "帮我看一下现在监控整体怎么样",
+        "当前有哪些商品需要重点处理",
+        "给我汇总一下价格监控状态",
+        "今天价格监控有什么问题",
+    )
+    if any(keyword in text for keyword in summary_keywords):
+        return "ecom_watch.monitor_summary", {}
     return None, {}
 
 
