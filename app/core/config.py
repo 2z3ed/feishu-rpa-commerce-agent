@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     LLM_ANOMALY_EXPLANATION_PROVIDER: str = "mock"
     LLM_ANOMALY_EXPLANATION_MODEL: str = ""
     LLM_ANOMALY_EXPLANATION_TIMEOUT_SECONDS: int = 10
+    # P14-D: LLM action plan (default off).
+    ENABLE_LLM_ACTION_PLAN: bool = False
+    LLM_ACTION_PLAN_PROVIDER: str = "mock"
+    LLM_ACTION_PLAN_MODEL: str = ""
+    LLM_ACTION_PLAN_TIMEOUT_SECONDS: int = 10
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

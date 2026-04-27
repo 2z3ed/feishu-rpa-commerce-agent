@@ -47,6 +47,15 @@ def _mock_infer_intent(normalized_text: str) -> LLMIntentFallbackOutput:
             reason="用户表达人工处理诉求，匹配人工接管视图。",
         )
 
+    if "重试" in text and ("url" in text or "链接" in text):
+        return LLMIntentFallbackOutput(
+            intent="ecom_watch.action_plan",
+            slots={},
+            confidence=0.84,
+            clarification_question="",
+            reason="用户在询问重试和 URL 治理顺序，匹配操作计划生成语义。",
+        )
+
     if "处理一下那个有问题的" in text:
         return LLMIntentFallbackOutput(
             intent="ecom_watch.monitor_diagnostics_query",

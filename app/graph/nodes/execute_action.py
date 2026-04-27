@@ -28,8 +28,10 @@ from app.rpa.confirm_update_price import (
 )
 from app.rpa.query_sku_status import run_query_sku_status_real_admin_readonly
 from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeError
+from app.schemas.llm_action_plan import ActionPlanInput, ActionPlanStats
 from app.schemas.llm_anomaly_explanation import AnomalyExplanationInput, AnomalyExplanationStats
 from app.schemas.llm_monitor_summary import MonitorSummaryInput, MonitorSummaryStats
+from app.services.llm.action_plan import run_llm_action_plan
 from app.services.llm.anomaly_explanation import run_llm_anomaly_explanation
 from app.services.llm.monitor_summary import run_llm_monitor_summary
 from app.utils.task_logger import log_step
@@ -359,6 +361,75 @@ def _detect_anomaly_explanation_focus(text: str) -> str:
         return "manual_review"
     if "mock_price" in normalized or "fallback_mock" in normalized:
         return "mock_source"
+    return "overview"
+
+
+def _build_action_plan_input(*, targets_data: dict) -> ActionPlanInput:
+    context = _build_monitor_targets_context(targets_data=targets_data)
+    targets = context.get("targets") if isinstance(context.get("targets"), list) else []
+
+    high_priority_count = 0
+    manual_review_count = 0
+    url_fix_count = 0
+    retry_count = 0
+    observe_count = 0
+
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        priority = str(item.get("action_priority") or "").strip().lower()
+        category = str(item.get("action_category") or "").strip().lower()
+        manual_review = bool(item.get("manual_review_required"))
+        probe_status = str(item.get("price_probe_status") or "").strip().lower()
+        source = str(item.get("price_source") or "").strip().lower()
+        page_type = str(item.get("price_page_type") or "").strip().lower()
+
+        if priority == "high":
+            high_priority_count += 1
+        if manual_review:
+            manual_review_count += 1
+        if category in {"url_fix", "replace_url"} or page_type in {"search_page", "listing_page"}:
+            url_fix_count += 1
+        if category in {"retry", "retry_probe"} or probe_status in {"failed", "fallback_mock"}:
+            retry_count += 1
+        if (
+            not manual_review
+            and priority != "high"
+            and category not in {"url_fix", "replace_url", "retry", "retry_probe"}
+            and probe_status not in {"failed", "fallback_mock"}
+            and source not in {"mock_price", "fallback_mock"}
+        ):
+            observe_count += 1
+
+    return ActionPlanInput(
+        stats=ActionPlanStats(
+            target_count=len(targets),
+            high_priority_count=high_priority_count,
+            manual_review_count=manual_review_count,
+            url_fix_count=url_fix_count,
+            retry_count=retry_count,
+            observe_count=observe_count,
+        ),
+        targets=targets,
+    )
+
+
+def _detect_action_plan_focus(text: str) -> str:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return "overview"
+    has_retry = "重试" in normalized
+    has_url_fix = ("url" in normalized) or ("链接" in normalized) or ("换url" in normalized) or ("换 url" in normalized)
+    if has_retry and has_url_fix:
+        return "retry_url_mix"
+    if "低可信" in normalized or "人工复核" in normalized:
+        return "manual_review_first"
+    if "顺序" in normalized or "优先" in normalized:
+        return "priority"
+    if has_retry:
+        return "retry"
+    if has_url_fix:
+        return "url_fix"
     return "overview"
 
 
@@ -805,6 +876,115 @@ def execute_action(state: dict) -> dict:
                 "explanation_focus": explanation_focus,
                 "explanation_length": len(explanation_text),
                 "error": str(explanation_output.error or "")[:120],
+            }
+
+        elif intent_code == "ecom_watch.action_plan":
+            b_client = BServiceClient()
+            result = b_client.get_monitor_targets()
+            action_plan_input = _build_action_plan_input(targets_data=result)
+            plan_focus = _detect_action_plan_focus(
+                state.get("normalized_text") or state.get("raw_text") or ""
+            )
+            action_plan_input.plan_focus = plan_focus
+            stats = action_plan_input.stats
+            log_step(
+                task_id,
+                "llm_action_plan_started",
+                "processing",
+                (
+                    f"provider={settings.LLM_ACTION_PLAN_PROVIDER} "
+                    f"target_count={stats.target_count} "
+                    f"high_priority_count={stats.high_priority_count} "
+                    f"manual_review_count={stats.manual_review_count} "
+                    f"url_fix_count={stats.url_fix_count} "
+                    f"retry_count={stats.retry_count} "
+                    f"observe_count={stats.observe_count} "
+                    f"plan_focus={plan_focus}"
+                ),
+            )
+            action_plan_output = run_llm_action_plan(action_plan_input)
+            action_plan_text = str(action_plan_output.plan_text or "").strip()
+            if not action_plan_text:
+                action_plan_text = "当前无法生成智能计划，但已获取到基础诊断信息。"
+
+            if action_plan_output.fallback_used:
+                log_step(
+                    task_id,
+                    "llm_action_plan_failed",
+                    "failed",
+                    (
+                        f"provider={action_plan_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"url_fix_count={stats.url_fix_count} "
+                        f"retry_count={stats.retry_count} "
+                        f"observe_count={stats.observe_count} "
+                        f"plan_focus={plan_focus} "
+                        f"error={str(action_plan_output.error or '')[:120]}"
+                    ),
+                )
+                log_step(
+                    task_id,
+                    "llm_action_plan_fallback_used",
+                    "success",
+                    (
+                        f"provider={action_plan_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"url_fix_count={stats.url_fix_count} "
+                        f"retry_count={stats.retry_count} "
+                        f"observe_count={stats.observe_count} "
+                        f"fallback_used=true "
+                        f"plan_focus={plan_focus} "
+                        f"plan_length={len(action_plan_text)}"
+                    ),
+                )
+            else:
+                log_step(
+                    task_id,
+                    "llm_action_plan_succeeded",
+                    "success",
+                    (
+                        f"provider={action_plan_output.provider} "
+                        f"target_count={stats.target_count} "
+                        f"high_priority_count={stats.high_priority_count} "
+                        f"manual_review_count={stats.manual_review_count} "
+                        f"url_fix_count={stats.url_fix_count} "
+                        f"retry_count={stats.retry_count} "
+                        f"observe_count={stats.observe_count} "
+                        f"fallback_used=false "
+                        f"plan_focus={plan_focus} "
+                        f"plan_length={len(action_plan_text)}"
+                    ),
+                )
+
+            state["status"] = "succeeded"
+            state["result_summary"] = action_plan_text
+            state["platform"] = "ecom_watch"
+            state["provider_id"] = "ecom_watch"
+            state["capability"] = "monitor.action_plan"
+            state["readiness_status"] = "ready"
+            state["endpoint_profile"] = "b_internal_monitor_targets_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "httpx_b_service"
+            state["selected_backend"] = "httpx_b_service"
+            state["final_backend"] = "httpx_b_service"
+            state["backend_selection_reason"] = "p14d_action_plan_chain"
+            state["client_profile"] = "b_service_client"
+            state["action_executed_detail"] = {
+                "provider": action_plan_output.provider,
+                "target_count": stats.target_count,
+                "high_priority_count": stats.high_priority_count,
+                "manual_review_count": stats.manual_review_count,
+                "url_fix_count": stats.url_fix_count,
+                "retry_count": stats.retry_count,
+                "observe_count": stats.observe_count,
+                "fallback_used": bool(action_plan_output.fallback_used),
+                "plan_focus": plan_focus,
+                "plan_length": len(action_plan_text),
+                "error": str(action_plan_output.error or "")[:120],
             }
 
         elif intent_code == "ecom_watch.monitor_probe_query":
@@ -1651,6 +1831,8 @@ def execute_action(state: dict) -> dict:
                 state["result_summary"] = f"总结失败：{str(e)}"
             elif intent_code == "ecom_watch.anomaly_explanation":
                 state["result_summary"] = f"解释失败：{str(e)}"
+            elif intent_code == "ecom_watch.action_plan":
+                state["result_summary"] = f"计划生成失败：{str(e)}"
             else:
                 state["result_summary"] = f"查询失败：{str(e)}"
             state["platform"] = "ecom_watch"

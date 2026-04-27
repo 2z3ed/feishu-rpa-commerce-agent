@@ -16,6 +16,7 @@ _LLM_FALLBACK_INTENT_ALLOWLIST = frozenset(
         "ecom_watch.monitor_targets",
         "ecom_watch.monitor_summary",
         "ecom_watch.anomaly_explanation",
+        "ecom_watch.action_plan",
         "ecom_watch.summary_today",
         "ecom_watch.monitor_probe_query",
         "ecom_watch.monitor_diagnostics_query",
@@ -92,6 +93,10 @@ def resolve_intent(state: dict) -> dict:
     # P14-C: anomaly explanation for boss-readable diagnostics.
     if not intent_code:
         intent_code, slots = try_match_b_anomaly_explanation(normalized_text)
+
+    # P14-D: action plan generation for next-step operations.
+    if not intent_code:
+        intent_code, slots = try_match_b_action_plan(normalized_text)
 
     # P13-G: query monitor targets by probe status/source.
     if not intent_code:
@@ -305,6 +310,33 @@ def try_match_b_anomaly_explanation(text: str) -> tuple[str | None, dict]:
     )
     if any(keyword in text for keyword in explanation_keywords):
         return "ecom_watch.anomaly_explanation", {}
+    return None, {}
+
+
+def try_match_b_action_plan(text: str) -> tuple[str | None, dict]:
+    normalized = str(text or "").strip().lower()
+    action_plan_keywords = (
+        "这些异常商品下一步怎么处理",
+        "给我一个处理计划",
+        "低可信对象接下来怎么处理",
+        "帮我安排一下处理顺序",
+    )
+    if any(keyword in normalized for keyword in action_plan_keywords):
+        return "ecom_watch.action_plan", {}
+
+    has_which = "哪些" in normalized
+    has_retry = "重试" in normalized
+    has_url = ("url" in normalized) or ("链接" in normalized)
+    has_switch_url = ("换url" in normalized) or ("换 url" in normalized) or ("换链接" in normalized)
+    has_first_retry = "先重试" in normalized
+    has_first_url = ("先换url" in normalized) or ("先换 url" in normalized) or ("先换链接" in normalized)
+
+    if (has_which and has_retry) or (has_which and (has_url or has_switch_url)):
+        return "ecom_watch.action_plan", {}
+    if has_first_retry or has_first_url:
+        return "ecom_watch.action_plan", {}
+    if has_retry and (has_url or has_switch_url):
+        return "ecom_watch.action_plan", {}
     return None, {}
 
 
