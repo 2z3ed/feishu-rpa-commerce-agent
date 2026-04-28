@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P15-B：真实 OCR Provider 接入
+P15-C：发票 / 小票结构化字段提取
 
 本轮是 A 项目主导开发，B 项目原则上不改。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、任务编排层、OCR provider 抽象层、老板交互层。
+定位：飞书入口层、消息编排层、任务编排层、OCR 结构化提取层、老板交互层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：电商监控业务服务层，当前 P15-B 原则上不改 B。
+定位：电商监控业务服务层，当前 P15-C 原则上不改 B。
 
 P14 已完成并总收口：
 - P14-A：LLM 意图解析 fallback
@@ -682,71 +682,81 @@ P15-A 已完成并收口：
 - 新增 OCR service 统一入口
 - 支持 raw_text / document_type / confidence / provider / blocks / needs_manual_review
 - 支持 ocr_document_started / succeeded / failed / fallback_used steps 留痕
-- 支持 unsupported provider 降级 mock
 - 飞书 / API mock OCR 验收已通过
 
-当前 P15-B 只做：
+P15-B 已完成并收口：
+- 支持 OCR_DOCUMENT_PROVIDER=mock / paddle / unsupported
+- 新增 PaddleOCR provider 封装
+- 支持 PaddleOCR 懒加载
+- 支持 provider_requested / provider_actual / fallback_reason 留痕
+- 支持 paddle provider 不可用时降级 mock
+- 修复 longconn queued 覆盖已完成任务的状态一致性问题
+- 飞书 / API provider routing 与降级验收已通过
 
-真实 OCR Provider 接入。
+当前 P15-C 只做：
+
+发票 / 小票结构化字段提取。
 
 固定原则：
 
-- 基于 P15-A 的 OCR provider 抽象继续扩展
-- 新增 PaddleOCR provider
-- OCR_DOCUMENT_PROVIDER=mock 仍保持可用
-- OCR_DOCUMENT_PROVIDER=paddle 时才尝试走真实 OCR provider
-- PaddleOCR 必须懒加载
-- 默认测试不能强依赖 PaddleOCR 已安装
-- PaddleOCR 未安装 / 未启用 / 调用异常时必须友好降级
-- 真实 OCR 结果仍然不是最终业务事实
-- OCR 结果必须提示人工确认
-- 本轮不做飞书附件下载
-- 本轮不做发票 / 小票字段结构化
-- 本轮不写入正式业务记录
+- 基于 P15-A/B 的 OCR raw_text 继续做结构化字段提取
+- 新增 document.structured_extract intent
+- 第一版以规则提取为主
+- 支持 invoice / receipt 两类 document_type 的最小字段提取
+- 输出字段、字段置信度、缺失字段、整体置信度、人工复核标记
+- 返回老板可读摘要，不直接给飞书用户 JSON 原文
+- OCR / 提取结果不是最终业务事实
+- 没有人工确认前不能写入正式业务记录
+- 本轮不接飞书附件下载
+- 本轮不做字段人工修正
+- 本轮不写入数据库正式结果
+- 本轮不写入飞书多维表
+- 本轮不做自动报销 / 自动付款
+- 本轮不做发票真伪校验
 - 本轮不触发 RPA
-- 文件 evidence 不允许随便进 git
 - 真实 .env 不允许提交
+- 文件 evidence 不允许随便进 git
 
 本轮必须先读以下约束文件：
 
-1. docs/p15/p15b-project-plan.md
-2. docs/p15/P15B-agent-prompt.md
-3. docs/p15/p15b-boss-demo-sop.md
-4. docs/p15/p15b-acceptance-checklist.md
+1. docs/p15/p15c-project-plan.md
+2. docs/p15/P15C-agent-prompt.md
+3. docs/p15/p15c-boss-demo-sop.md
+4. docs/p15/p15c-acceptance-checklist.md
 
 如果以上文件不存在，先创建文档，不要直接开写业务代码。
 
 当前禁止：
 
-- 不做 P15-C 发票 / 小票字段结构化
+- 不做 P15-D 飞书文件入口接入
 - 不接飞书附件下载
-- 不做多页 PDF 完整处理
-- 不做人工确认与字段修正
+- 不处理真实附件上传
+- 不做 PDF 多页解析
+- 不做人工确认闭环
+- 不做字段修改命令
 - 不写入数据库正式结果
 - 不写入飞书多维表
-- 不做批量识别
 - 不做自动报销
 - 不做自动付款
 - 不做税务合规判断
+- 不做发票真伪校验
 - 不触发 RPA
 - 不改 B 项目
 - 不重构 P14-A/B/C/D
-- 不破坏 P15-A mock OCR 能力
+- 不破坏 P15-A/B OCR 能力
 - 不把真实 .env 或 OCR evidence 加入 git
 
-P15-B 最小通过标准：
+P15-C 最小通过标准：
 
-- OCR provider routing 支持 mock / paddle / unsupported
-- paddle provider 懒加载，不影响默认测试
-- PaddleOCR 未安装时不报 500
-- PaddleOCR 未启用时不报 500
-- provider 不可用时能 fallback mock
-- OCR 输出仍符合 OCRDocumentOutput
-- steps 有 provider / fallback / confidence / blocks 留痕
-- mock provider 回归不退化
-- 不接飞书附件下载
-- 不做字段结构化
+- 新增 document.structured_extract intent
+- 新增结构化提取 schema
+- 新增 rule extractor service
+- 能从 mock OCR raw_text 提取发票号码、开票日期、购买方、金额
+- 能输出 fields / confidence / missing_fields / needs_manual_review
+- 能返回老板可读字段摘要
+- task_steps 有 document_extraction_started / succeeded / failed / fallback_used 留痕
 - 不写正式业务结果
 - 不触发 RPA
-- P15-A 回归不退化
+- 不接飞书附件下载
+- P15-A/B 回归不退化
 - P14 回归不退化

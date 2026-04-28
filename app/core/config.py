@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     ENABLE_OCR_DOCUMENT_RECOGNIZE: bool = False
     OCR_DOCUMENT_PROVIDER: str = "mock"
     OCR_DOCUMENT_TIMEOUT_SECONDS: int = 10
+    # P15-C: structured extraction over OCR raw_text (default off).
+    ENABLE_DOCUMENT_STRUCTURED_EXTRACTION: bool = False
+    DOCUMENT_EXTRACTION_PROVIDER: str = "rule"
+    DOCUMENT_EXTRACTION_TIMEOUT_SECONDS: int = 10
     OCR_EVIDENCE_DIR: str = "data/ocr_evidence"
     OCR_PADDLE_ENABLED: bool = False
     OCR_PADDLE_LANG: str = "ch"
