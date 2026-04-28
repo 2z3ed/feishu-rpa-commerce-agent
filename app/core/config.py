@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     LLM_ACTION_PLAN_PROVIDER: str = "mock"
     LLM_ACTION_PLAN_MODEL: str = ""
     LLM_ACTION_PLAN_TIMEOUT_SECONDS: int = 10
+    # P15-A: OCR document recognize skeleton (default off).
+    ENABLE_OCR_DOCUMENT_RECOGNIZE: bool = False
+    OCR_DOCUMENT_PROVIDER: str = "mock"
+    OCR_DOCUMENT_TIMEOUT_SECONDS: int = 10
+    OCR_EVIDENCE_DIR: str = "data/ocr_evidence"
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

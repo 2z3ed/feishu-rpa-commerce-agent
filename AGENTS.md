@@ -658,65 +658,86 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P14-Z：P14 LLM 智能增强层总收口文档
+P15-A：OCR 识别骨架与 mock 闭环
 
-本轮只做文档收口，不做功能开发。
+本轮是 A 项目主导开发，B 项目原则上不改。
 
-P14-A 已完成并收口：
-- LLM 意图解析 fallback
-- 规则未命中时触发 LLM intent fallback
-- 支持 allowlist / confidence / 低置信度澄清
-- system.confirm_task 不允许由 LLM fallback 生成
-- product.update_price 不绕过确认，只能进入 awaiting_confirmation
-- 飞书实机验收已通过
+A 项目：feishu-rpa-commerce-agent  
+定位：飞书入口层、消息编排层、任务编排层、OCR 任务骨架层、老板交互层。
 
-P14-B 已完成并收口：
-- LLM 监控对象运营总结
-- 支持 overview / health_check / priority_targets
-- 支持 LLM provider 失败降级为规则摘要
-- 飞书实机验收已通过
+B 项目：Ecom-Watch-Agent-Agent  
+定位：电商监控业务服务层，当前 P15-A 原则上不改 B。
 
-P14-C 已完成并收口：
-- LLM 异常原因解释
-- 支持 overview / low_confidence / mock_source / manual_review
-- 支持 LLM provider 失败降级为规则解释
-- 飞书实机验收已通过
+P14 已完成并总收口：
+- P14-A：LLM 意图解析 fallback
+- P14-B：LLM 监控对象运营总结
+- P14-C：LLM 异常原因解释
+- P14-D：LLM 操作计划生成
+- P14-Z：P14 LLM 智能增强层总收口文档
+- P14 安全边界：LLM 只做理解、总结、解释、计划，不自动执行高风险动作
 
-P14-D 已完成并收口：
-- LLM 操作计划生成
-- 支持 overview / priority / manual_review_first / retry_url_mix
-- 支持 LLM provider 失败降级为规则计划
-- 飞书实机验收已通过
+当前 P15-A 只做：
 
-当前 P14-Z 只做：
-
-P14 总收口文档。
-
-建议新增文档：
-
-docs/p14/p14-closure-summary.md
+OCR 识别骨架与 mock 闭环。
 
 固定原则：
 
-- 只写文档
-- 不改业务代码
-- 不改真实 .env
-- 不新增 P15
-- 不新增 OCR
-- 不重构 P14-A/B/C/D
-- 不删除历史文档
-- 不编造测试结果
-- 不编造飞书实机结果
-- 明确记录 P14 各阶段完成内容、环境变量、验收结论、未阻塞问题、后续建议
+- 先搭 OCR 任务骨架
+- 先用 mock OCR provider
+- 先验证 OCR 输入 / 输出 schema
+- 先验证 task_steps 留痕
+- 先验证 provider 可插拔结构
+- 不接真实 OCR 引擎
+- 不接 PaddleOCR
+- 不接飞书附件下载
+- 不做发票字段结构化
+- 不写入飞书多维表
+- 不做人工修正闭环
+- 不做自动报销 / 自动入账
+- 不把 OCR 结果当最终业务事实
+- 低置信度 OCR 结果必须提示人工确认
+- 文件 evidence 不允许随便进 git
+- 真实 .env 不允许提交
 
-本轮禁止：
+本轮必须先读以下约束文件：
 
-- 不做 P15 OCR
-- 不做发票识别
-- 不改 resolve_intent.py
-- 不改 execute_action.py
-- 不改 LLM service
-- 不改测试
+1. docs/p15/p15a-project-plan.md
+2. docs/p15/P15A-agent-prompt.md
+3. docs/p15/p15a-boss-demo-sop.md
+4. docs/p15/p15a-acceptance-checklist.md
+
+如果以上文件不存在，先创建文档，不要直接开写业务代码。
+
+当前禁止：
+
+- 不做 P15-B 真实 OCR provider
+- 不接 PaddleOCR
+- 不接云 OCR
+- 不接飞书附件下载
+- 不处理真实 PDF 转图片
+- 不做发票 / 小票字段结构化
+- 不做人工确认与字段修正
+- 不写入数据库正式结果
+- 不写入飞书多维表
+- 不做批量识别
+- 不做自动报销
+- 不做自动付款
+- 不做税务合规判断
 - 不改 B 项目
-- 不删除 P14-A/B/C/D 文档
-- 不把真实 .env 加入 git
+- 不重构 P14-A/B/C/D
+- 不破坏 P14 已收口能力
+- 不把真实 .env 或文件 evidence 加入 git
+
+P15-A 最小通过标准：
+
+- 新增 OCR intent，例如 document.ocr_recognize
+- 新增 OCR 输入 schema
+- 新增 OCR 输出 schema
+- 新增 mock OCR provider
+- 能返回 document_type / raw_text / confidence / provider
+- OCR provider 异常时能友好失败或降级
+- task_steps 有 ocr_document_started / succeeded / failed / fallback_used 留痕
+- 不自动写入正式业务记录
+- 不自动触发 RPA
+- 不影响 P14-A/B/C/D
+- 测试通过

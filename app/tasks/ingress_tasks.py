@@ -172,6 +172,15 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         page_failure_code = pr.get("page_failure_code", "")
         screenshot_paths = pr.get("screenshot_paths", [])
         screenshot_paths_text = "|".join([str(x) for x in screenshot_paths]) if isinstance(screenshot_paths, list) else str(screenshot_paths or "")
+        ocr_provider = pr.get("provider", "")
+        ocr_document_type = pr.get("document_type", "")
+        ocr_mime_type = pr.get("mime_type", "")
+        ocr_confidence = pr.get("confidence", None)
+        ocr_raw_text_length = pr.get("raw_text_length", 0)
+        ocr_blocks_count = pr.get("blocks_count", 0)
+        ocr_needs_manual_review = pr.get("needs_manual_review", None)
+        ocr_fallback_used = pr.get("fallback_used", None)
+        ocr_error = pr.get("error", "")
         gate_allow = result.get("gate_allow", pr.get("gate_allow", None))
         gate_status = result.get("gate_status", pr.get("gate_status", ""))
         gate_reason = result.get("gate_reason", pr.get("gate_reason", ""))
@@ -236,6 +245,15 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "page_evidence_count": page_evidence_count,
                 "page_failure_code": page_failure_code,
                 "screenshot_paths": screenshot_paths_text,
+                "provider": ocr_provider,
+                "document_type": ocr_document_type,
+                "mime_type": ocr_mime_type,
+                "confidence": ocr_confidence,
+                "raw_text_length": ocr_raw_text_length,
+                "blocks_count": ocr_blocks_count,
+                "needs_manual_review": ocr_needs_manual_review,
+                "fallback_used": ocr_fallback_used,
+                "error": ocr_error,
             }
         )
         log_step(

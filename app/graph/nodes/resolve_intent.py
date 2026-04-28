@@ -32,6 +32,7 @@ _LLM_FALLBACK_INTENT_ALLOWLIST = frozenset(
         "ecom_watch.add_monitor_by_url",
         "ecom_watch.add_from_candidates",
         "ecom_watch.manage_monitor_target",
+        "document.ocr_recognize",
         "product.query_sku_status",
         "product.update_price",
     }
@@ -153,6 +154,10 @@ def resolve_intent(state: dict) -> dict:
     # Try to match warehouse.adjust_inventory (P6.1 Odoo high-risk write sample)
     if not intent_code:
         intent_code, slots = try_match_warehouse_adjust_inventory(normalized_text)
+
+    # P15-A: OCR document recognize skeleton via mock input.
+    if not intent_code:
+        intent_code, slots = try_match_document_ocr_recognize(normalized_text, state)
 
     # Try to match product.query_sku_status
     if not intent_code:
@@ -629,6 +634,52 @@ def try_match_product_query_sku_status(text: str) -> Tuple[Optional[str], Dict[s
             return 'product.query_sku_status', slots
     
     return None, {}
+
+
+def try_match_document_ocr_recognize(text: str, state: dict | None = None) -> tuple[str | None, dict]:
+    normalized = str(text or "").strip().lower()
+    explicit_keywords = (
+        "识别这张发票",
+        "帮我读一下这个文件",
+        "提取这张图片里的文字",
+        "ocr 识别一下",
+        "ocr识别一下",
+        "帮我识别票据文字",
+    )
+    has_explicit_keyword = any(keyword in normalized for keyword in explicit_keywords)
+    has_ocr = "ocr" in normalized
+    has_recognize = any(keyword in normalized for keyword in ("识别", "提取", "读一下", "读出"))
+    has_document = any(keyword in normalized for keyword in ("发票", "票据", "文件", "图片", "文字"))
+    if not (has_explicit_keyword or (has_recognize and has_document) or (has_ocr and (has_recognize or has_document))):
+        return None, {}
+
+    hint_document_type = "invoice"
+    if "收据" in normalized or "小票" in normalized:
+        hint_document_type = "receipt"
+    elif "发票" not in normalized and "票据" not in normalized:
+        hint_document_type = "unknown"
+
+    user_open_id = ""
+    if isinstance(state, dict):
+        user_open_id = str(state.get("user_open_id") or "").strip()
+    requested_by = user_open_id or "feishu_user"
+
+    file_name = "ocr_document.png"
+    if hint_document_type == "invoice":
+        file_name = "invoice_sample.png"
+    elif hint_document_type == "receipt":
+        file_name = "receipt_sample.png"
+
+    slots = {
+        "document_id": f"mock-doc-{hint_document_type or 'unknown'}",
+        "file_name": file_name,
+        "mime_type": "image/png",
+        "file_path": f"mock://{file_name}",
+        "source": "mock",
+        "requested_by": requested_by,
+        "hint_document_type": hint_document_type,
+    }
+    return "document.ocr_recognize", slots
 
 
 def try_match_warehouse_query_inventory(text: str) -> tuple[str | None, dict]:

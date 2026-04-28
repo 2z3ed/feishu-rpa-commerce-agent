@@ -31,9 +31,11 @@ from app.rpa.yingdao_runner import run_yingdao_adjust_inventory, YingdaoBridgeEr
 from app.schemas.llm_action_plan import ActionPlanInput, ActionPlanStats
 from app.schemas.llm_anomaly_explanation import AnomalyExplanationInput, AnomalyExplanationStats
 from app.schemas.llm_monitor_summary import MonitorSummaryInput, MonitorSummaryStats
+from app.schemas.ocr_document import OCRDocumentInput, OCRDocumentOutput
 from app.services.llm.action_plan import run_llm_action_plan
 from app.services.llm.anomaly_explanation import run_llm_anomaly_explanation
 from app.services.llm.monitor_summary import run_llm_monitor_summary
+from app.services.ocr.document_ocr import run_document_ocr
 from app.utils.task_logger import log_step
 from app.clients.b_service_client import BServiceClient, BServiceError
 
@@ -54,6 +56,52 @@ def _extract_confirm_failure_layer(result: dict) -> str:
 def _strip_error_prefix(raw: str) -> str:
     text = (raw or "").strip()
     return re.sub(r"^\[[^\]]+\]\s*", "", text).strip()
+
+
+def _build_ocr_step_detail(
+    ocr_input: OCRDocumentInput,
+    ocr_output: OCRDocumentOutput | None = None,
+    *,
+    error: str = "",
+) -> str:
+    provider = ""
+    document_type = ""
+    confidence = 0.0
+    raw_text_length = 0
+    blocks_count = 0
+    needs_manual_review = True
+    if ocr_output is not None:
+        provider = str(ocr_output.provider or "").strip()
+        document_type = str(ocr_output.document_type or "").strip()
+        confidence = float(ocr_output.confidence or 0.0)
+        raw_text_length = len(str(ocr_output.raw_text or ""))
+        blocks_count = len(ocr_output.blocks or [])
+        needs_manual_review = bool(ocr_output.needs_manual_review)
+    detail = {
+        "provider": provider or (settings.OCR_DOCUMENT_PROVIDER or "mock"),
+        "document_type": document_type or str(ocr_input.hint_document_type or "unknown"),
+        "mime_type": str(ocr_input.mime_type or "application/octet-stream"),
+        "confidence": f"{confidence:.2f}",
+        "raw_text_length": str(raw_text_length),
+        "blocks_count": str(blocks_count),
+        "needs_manual_review": "true" if needs_manual_review else "false",
+    }
+    if error:
+        detail["error"] = error[:120]
+    return ", ".join(f"{key}={value}" for key, value in detail.items())
+
+
+def _build_ocr_input_from_state(state: dict, slots: dict) -> OCRDocumentInput:
+    requested_by = str(slots.get("requested_by") or state.get("user_open_id") or "feishu_user").strip()
+    return OCRDocumentInput(
+        document_id=str(slots.get("document_id") or state.get("task_id") or "mock-doc").strip(),
+        file_name=str(slots.get("file_name") or "ocr_document.png").strip(),
+        mime_type=str(slots.get("mime_type") or "image/png").strip(),
+        file_path=str(slots.get("file_path") or "mock://ocr_document.png").strip(),
+        source=str(slots.get("source") or "mock").strip(),
+        requested_by=requested_by or "feishu_user",
+        hint_document_type=str(slots.get("hint_document_type") or "unknown").strip(),
+    )
 
 
 def _evaluate_adjust_inventory_gate(slots: dict) -> tuple[bool, str]:
@@ -1541,6 +1589,74 @@ def execute_action(state: dict) -> dict:
             state["final_backend"] = "httpx_b_service"
             state["backend_selection_reason"] = "p11c_add_from_candidates_chain"
             state["client_profile"] = "b_service_client"
+
+        elif intent_code == "document.ocr_recognize":
+            ocr_input = _build_ocr_input_from_state(state, slots)
+            log_step(
+                task_id,
+                "ocr_document_started",
+                "processing",
+                _build_ocr_step_detail(ocr_input),
+            )
+            ocr_result = run_document_ocr(ocr_input)
+            if ocr_result.fallback_used:
+                log_step(
+                    task_id,
+                    "ocr_document_fallback_used",
+                    "success",
+                    _build_ocr_step_detail(ocr_input, ocr_result, error=ocr_result.error),
+                )
+
+            state["platform"] = "ocr"
+            state["provider_id"] = str(ocr_result.provider or "mock")
+            state["capability"] = "document.ocr_recognize"
+            state["readiness_status"] = "ready" if ocr_result.status == "succeeded" else "degraded"
+            state["endpoint_profile"] = f"document_ocr_{state['provider_id']}_v1"
+            state["session_injection_mode"] = "none"
+            state["execution_backend"] = "document_ocr_service"
+            state["selected_backend"] = "document_ocr_service"
+            state["final_backend"] = "document_ocr_service"
+            state["backend_selection_reason"] = (
+                "ocr_provider_fallback_to_mock" if ocr_result.fallback_used else "ocr_provider_direct"
+            )
+            state["client_profile"] = "document_ocr_service"
+            state["response_mapper"] = "document_ocr_summary"
+            state["request_adapter"] = "ocr_document_input_schema"
+            state["auth_profile"] = "none"
+            state["provider_profile"] = state["provider_id"]
+            state["credential_profile"] = "none"
+            state["parsed_result"] = {
+                "document_type": ocr_result.document_type,
+                "mime_type": ocr_input.mime_type,
+                "confidence": round(float(ocr_result.confidence), 4),
+                "provider": ocr_result.provider,
+                "raw_text_length": len(str(ocr_result.raw_text or "")),
+                "blocks_count": len(ocr_result.blocks or []),
+                "needs_manual_review": bool(ocr_result.needs_manual_review),
+                "fallback_used": bool(ocr_result.fallback_used),
+                "error": str(ocr_result.error or "")[:200],
+            }
+            state["action_executed_detail"] = state["parsed_result"]
+
+            if ocr_result.status == "succeeded":
+                log_step(
+                    task_id,
+                    "ocr_document_succeeded",
+                    "success",
+                    _build_ocr_step_detail(ocr_input, ocr_result),
+                )
+                state["status"] = "succeeded"
+                state["result_summary"] = format_ocr_document_result(ocr_result)
+            else:
+                log_step(
+                    task_id,
+                    "ocr_document_failed",
+                    "failed",
+                    _build_ocr_step_detail(ocr_input, ocr_result, error=ocr_result.error),
+                )
+                state["status"] = "failed"
+                state["error_message"] = str(ocr_result.error or "ocr_document_failed")
+                state["result_summary"] = format_ocr_document_failure(ocr_result)
 
         elif intent_code == "warehouse.query_inventory":
             result = execute_odoo_query_inventory(slots)
@@ -3600,6 +3716,33 @@ def format_task_confirmation_result(result: dict) -> str:
         if result.get("api_price_after_update") is not None:
             lines.append(f"API 回读价：{result.get('api_price_after_update')}")
     return "\n".join(lines)
+
+
+def format_ocr_document_result(result: OCRDocumentOutput) -> str:
+    summary_lines = [
+        "已完成 OCR 识别。",
+        "",
+        f"文档类型：{result.document_type}",
+        f"识别置信度：{result.confidence:.2f}",
+        f"Provider：{result.provider}",
+        "",
+        "识别文本摘要：",
+    ]
+    for line in str(result.raw_text or "").splitlines()[:4]:
+        summary_lines.append(line)
+    if result.fallback_used:
+        summary_lines.extend(["", "提醒：主 provider 不可用，当前已降级为 mock 结果。"])
+    if result.needs_manual_review:
+        summary_lines.extend(["", "提醒：当前结果仅为 OCR 初步识别，后续仍需人工确认。"])
+    return "\n".join(summary_lines)
+
+
+def format_ocr_document_failure(result: OCRDocumentOutput) -> str:
+    return (
+        "OCR 识别暂时失败。\n"
+        f"Provider：{result.provider}\n"
+        "请人工确认文件内容后重试。"
+    )
 
 
 def execute_odoo_adjust_inventory_prepare(*, task_id: str, slots: dict) -> dict:
