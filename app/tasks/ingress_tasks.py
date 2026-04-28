@@ -173,6 +173,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         screenshot_paths = pr.get("screenshot_paths", [])
         screenshot_paths_text = "|".join([str(x) for x in screenshot_paths]) if isinstance(screenshot_paths, list) else str(screenshot_paths or "")
         ocr_provider = pr.get("provider", "")
+        ocr_provider_requested = pr.get("provider_requested", "")
+        ocr_provider_actual = pr.get("provider_actual", "")
         ocr_document_type = pr.get("document_type", "")
         ocr_mime_type = pr.get("mime_type", "")
         ocr_confidence = pr.get("confidence", None)
@@ -180,6 +182,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
         ocr_blocks_count = pr.get("blocks_count", 0)
         ocr_needs_manual_review = pr.get("needs_manual_review", None)
         ocr_fallback_used = pr.get("fallback_used", None)
+        ocr_fallback_reason = pr.get("fallback_reason", "")
         ocr_error = pr.get("error", "")
         gate_allow = result.get("gate_allow", pr.get("gate_allow", None))
         gate_status = result.get("gate_status", pr.get("gate_status", ""))
@@ -246,6 +249,8 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "page_failure_code": page_failure_code,
                 "screenshot_paths": screenshot_paths_text,
                 "provider": ocr_provider,
+                "provider_requested": ocr_provider_requested,
+                "provider_actual": ocr_provider_actual,
                 "document_type": ocr_document_type,
                 "mime_type": ocr_mime_type,
                 "confidence": ocr_confidence,
@@ -253,6 +258,7 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
                 "blocks_count": ocr_blocks_count,
                 "needs_manual_review": ocr_needs_manual_review,
                 "fallback_used": ocr_fallback_used,
+                "fallback_reason": ocr_fallback_reason,
                 "error": ocr_error,
             }
         )

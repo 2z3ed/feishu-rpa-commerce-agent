@@ -78,7 +78,11 @@ def _build_ocr_step_detail(
         blocks_count = len(ocr_output.blocks or [])
         needs_manual_review = bool(ocr_output.needs_manual_review)
     detail = {
+        "provider_requested": (settings.OCR_DOCUMENT_PROVIDER or "mock"),
+        "provider_actual": provider or (settings.OCR_DOCUMENT_PROVIDER or "mock"),
         "provider": provider or (settings.OCR_DOCUMENT_PROVIDER or "mock"),
+        "fallback_used": "true" if bool(ocr_output and ocr_output.fallback_used) else "false",
+        "fallback_reason": str(ocr_output.fallback_reason if ocr_output else "")[:80],
         "document_type": document_type or str(ocr_input.hint_document_type or "unknown"),
         "mime_type": str(ocr_input.mime_type or "application/octet-stream"),
         "confidence": f"{confidence:.2f}",
@@ -1626,6 +1630,8 @@ def execute_action(state: dict) -> dict:
             state["provider_profile"] = state["provider_id"]
             state["credential_profile"] = "none"
             state["parsed_result"] = {
+                "provider_requested": str(settings.OCR_DOCUMENT_PROVIDER or "mock"),
+                "provider_actual": str(ocr_result.provider or "mock"),
                 "document_type": ocr_result.document_type,
                 "mime_type": ocr_input.mime_type,
                 "confidence": round(float(ocr_result.confidence), 4),
@@ -1634,6 +1640,7 @@ def execute_action(state: dict) -> dict:
                 "blocks_count": len(ocr_result.blocks or []),
                 "needs_manual_review": bool(ocr_result.needs_manual_review),
                 "fallback_used": bool(ocr_result.fallback_used),
+                "fallback_reason": str(ocr_result.fallback_reason or "")[:80],
                 "error": str(ocr_result.error or "")[:200],
             }
             state["action_executed_detail"] = state["parsed_result"]

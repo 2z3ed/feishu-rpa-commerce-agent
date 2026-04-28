@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     OCR_DOCUMENT_PROVIDER: str = "mock"
     OCR_DOCUMENT_TIMEOUT_SECONDS: int = 10
     OCR_EVIDENCE_DIR: str = "data/ocr_evidence"
+    OCR_PADDLE_ENABLED: bool = False
+    OCR_PADDLE_LANG: str = "ch"
+    OCR_PADDLE_USE_GPU: bool = False
+    OCR_SAMPLE_FILE_PATH: str = "tests/fixtures/ocr/sample_invoice.png"
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False

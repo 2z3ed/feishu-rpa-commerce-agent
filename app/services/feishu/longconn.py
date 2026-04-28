@@ -29,6 +29,11 @@ from app.services.feishu.cards.monitor_targets import (
 )
 
 
+def _can_mark_task_queued(current_status: str) -> bool:
+    normalized = str(current_status or "").strip().lower()
+    return normalized in {TaskStatus.RECEIVED.value, TaskStatus.QUEUED.value}
+
+
 class FeishuLongConnListener:
     @staticmethod
     def _extract_monitor_targets_list(targets_data: dict[str, Any]) -> list[dict]:
@@ -139,8 +144,15 @@ class FeishuLongConnListener:
             try:
                 task_record = db.query(TaskRecord).filter(TaskRecord.task_id == new_task_id).first()
                 if task_record:
-                    task_record.status = TaskStatus.QUEUED.value
-                    db.commit()
+                    if _can_mark_task_queued(task_record.status):
+                        task_record.status = TaskStatus.QUEUED.value
+                        db.commit()
+                    else:
+                        logger.info(
+                            "Skip setting queued for task_id=%s because current status is %s",
+                            new_task_id,
+                            task_record.status,
+                        )
             finally:
                 db.close()
 

@@ -28,4 +28,5 @@ class OCRDocumentOutput(BaseModel):
     needs_manual_review: bool = True
     warnings: list[str] = Field(default_factory=list)
     fallback_used: bool = False
+    fallback_reason: str = ""
     error: str = ""
