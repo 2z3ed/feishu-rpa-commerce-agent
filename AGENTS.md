@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P15-C：发票 / 小票结构化字段提取
+P15-D：飞书文件入口接入
 
 本轮是 A 项目主导开发，B 项目原则上不改。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、任务编排层、OCR 结构化提取层、老板交互层。
+定位：飞书入口层、消息编排层、任务编排层、飞书文件入口层、OCR 文件处理层、老板交互层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：电商监控业务服务层，当前 P15-C 原则上不改 B。
+定位：电商监控业务服务层，当前 P15-D 原则上不改 B。
 
 P14 已完成并总收口：
 - P14-A：LLM 意图解析 fallback
@@ -680,62 +680,66 @@ P15-A 已完成并收口：
 - 新增 OCR 输入 / 输出 schema
 - 新增 mock OCR provider
 - 新增 OCR service 统一入口
-- 支持 raw_text / document_type / confidence / provider / blocks / needs_manual_review
-- 支持 ocr_document_started / succeeded / failed / fallback_used steps 留痕
+- 支持 ocr_document_* steps 留痕
 - 飞书 / API mock OCR 验收已通过
 
 P15-B 已完成并收口：
 - 支持 OCR_DOCUMENT_PROVIDER=mock / paddle / unsupported
 - 新增 PaddleOCR provider 封装
-- 支持 PaddleOCR 懒加载
 - 支持 provider_requested / provider_actual / fallback_reason 留痕
-- 支持 paddle provider 不可用时降级 mock
+- 支持 provider 不可用时降级 mock
 - 修复 longconn queued 覆盖已完成任务的状态一致性问题
-- 飞书 / API provider routing 与降级验收已通过
 
-当前 P15-C 只做：
+P15-C 已完成并收口：
+- 新增 document.structured_extract intent
+- 新增结构化提取 schema
+- 新增 rule extractor service
+- 支持 invoice / receipt 最小字段提取
+- 支持 fields / overall_confidence / missing_fields / needs_manual_review
+- 支持 document_extraction_* steps 留痕
+- 飞书实机验收已通过
 
-发票 / 小票结构化字段提取。
+当前 P15-D 只做：
+
+飞书文件入口接入。
 
 固定原则：
 
-- 基于 P15-A/B 的 OCR raw_text 继续做结构化字段提取
-- 新增 document.structured_extract intent
-- 第一版以规则提取为主
-- 支持 invoice / receipt 两类 document_type 的最小字段提取
-- 输出字段、字段置信度、缺失字段、整体置信度、人工复核标记
-- 返回老板可读摘要，不直接给飞书用户 JSON 原文
-- OCR / 提取结果不是最终业务事实
-- 没有人工确认前不能写入正式业务记录
-- 本轮不接飞书附件下载
-- 本轮不做字段人工修正
-- 本轮不写入数据库正式结果
-- 本轮不写入飞书多维表
-- 本轮不做自动报销 / 自动付款
-- 本轮不做发票真伪校验
-- 本轮不触发 RPA
-- 真实 .env 不允许提交
-- 文件 evidence 不允许随便进 git
+- 让 document.ocr_recognize / document.structured_extract 支持飞书图片或文件附件
+- 解析飞书消息里的 image/file 附件
+- 下载单张图片或单个文件
+- 保存到 evidence 目录
+- 构造 OCRDocumentInput
+- 复用 P15-A/B OCR service
+- 复用 P15-C structured extraction service
+- 记录附件检测、下载、失败、成功 steps
+- 无附件时给友好提示
+- 文件类型不支持时给友好提示
+- 文件过大时给友好提示
+- 不泄露 token / API key / 文件下载凭证
+- 不把真实文件或 evidence 加入 git
+- 不写正式业务结果
+- 不触发 RPA
 
 本轮必须先读以下约束文件：
 
-1. docs/p15/p15c-project-plan.md
-2. docs/p15/P15C-agent-prompt.md
-3. docs/p15/p15c-boss-demo-sop.md
-4. docs/p15/p15c-acceptance-checklist.md
+1. docs/p15/p15d-project-plan.md
+2. docs/p15/P15D-agent-prompt.md
+3. docs/p15/p15d-boss-demo-sop.md
+4. docs/p15/p15d-acceptance-checklist.md
 
 如果以上文件不存在，先创建文档，不要直接开写业务代码。
 
 当前禁止：
 
-- 不做 P15-D 飞书文件入口接入
-- 不接飞书附件下载
-- 不处理真实附件上传
-- 不做 PDF 多页解析
-- 不做人工确认闭环
-- 不做字段修改命令
-- 不写入数据库正式结果
-- 不写入飞书多维表
+- 不做 P15-E 人工确认与字段修正闭环
+- 不做 P15-F 结构化结果写入与归档
+- 不做多文件批量处理
+- 不做 PDF 多页 OCR
+- 不做复杂文件预览
+- 不做字段人工修正
+- 不写数据库正式结果
+- 不写飞书多维表
 - 不做自动报销
 - 不做自动付款
 - 不做税务合规判断
@@ -743,20 +747,22 @@ P15-B 已完成并收口：
 - 不触发 RPA
 - 不改 B 项目
 - 不重构 P14-A/B/C/D
-- 不破坏 P15-A/B OCR 能力
-- 不把真实 .env 或 OCR evidence 加入 git
+- 不破坏 P15-A/B/C
+- 不把真实 .env、token、飞书下载文件、OCR evidence 加入 git
 
-P15-C 最小通过标准：
+P15-D 最小通过标准：
 
-- 新增 document.structured_extract intent
-- 新增结构化提取 schema
-- 新增 rule extractor service
-- 能从 mock OCR raw_text 提取发票号码、开票日期、购买方、金额
-- 能输出 fields / confidence / missing_fields / needs_manual_review
-- 能返回老板可读字段摘要
-- task_steps 有 document_extraction_started / succeeded / failed / fallback_used 留痕
+- 能识别飞书消息中的单张图片或单个文件附件
+- 能提取 file_key / image_key / message_id 等必要元数据
+- 能调用飞书文件下载能力或 mock downloader
+- 能保存到 evidence 目录
+- 能构造 OCRDocumentInput
+- document.ocr_recognize 可使用下载后的 file_path
+- document.structured_extract 可使用下载后的 file_path
+- 无附件 / 下载失败 / 类型不支持 / 文件过大均有友好提示
+- task_steps 有 feishu_attachment_detected / feishu_file_download_started / succeeded / failed 等留痕
+- 不泄露 token / 真实敏感路径 / 大段文件内容
 - 不写正式业务结果
 - 不触发 RPA
-- 不接飞书附件下载
-- P15-A/B 回归不退化
+- P15-A/B/C 回归不退化
 - P14 回归不退化

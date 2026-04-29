@@ -66,31 +66,42 @@ class FeishuLongConnListener:
         self._thread = None
 
     def _handle_message_event(self, data):
-        # ===== 绝对入口日志 =====
-        print(f"===========================================>", file=sys.stderr)
-        print(f">>> ENTER _handle_message_event with data type: {type(data)}", file=sys.stderr)
-        print(f"===========================================>", file=sys.stderr)
-        
         try:
-            # ========== 强制可见调试：收到任意飞书事件 ==========
             logger.info("=== _handle_message_event CALLED === data_type=%s", type(data))
-            
-            raw_dict = data.to_dict() if hasattr(data, 'to_dict') else {}
-            logger.info("=== FEISHU EVENT RECEIVED === event_type=im.message.receive_v1, raw_payload=%s", 
-                        json.dumps(raw_dict, ensure_ascii=False)[:500])
 
-            # ========== 解析消息 ==========
+            raw_dict = data.to_dict() if hasattr(data, 'to_dict') else {}
+            message = raw_dict.get("event", {}).get("message", {}) if isinstance(raw_dict.get("event"), dict) else {}
+            content_obj = {}
+            if isinstance(message.get("content"), dict):
+                content_obj = message.get("content")
+            elif isinstance(message.get("content"), str):
+                try:
+                    maybe = json.loads(message.get("content"))
+                    if isinstance(maybe, dict):
+                        content_obj = maybe
+                except Exception:
+                    content_obj = {}
+            logger.info(
+                "=== FEISHU EVENT RECEIVED === event_type=im.message.receive_v1, message_id=%s, message_type=%s, content_keys=%s, has_image_key=%s, has_file_key=%s",
+                message.get("message_id", ""),
+                message.get("message_type", ""),
+                sorted(list(content_obj.keys())) if isinstance(content_obj, dict) else [],
+                bool(content_obj.get("image_key") or message.get("image_key")),
+                bool(content_obj.get("file_key") or message.get("file_key")),
+            )
+
             message_event = parse_p2_im_message_receive_v1(data)
-            
-            # ========== 调试：打印 parser 结果 ==========
             if not message_event:
                 logger.warning("=== PARSER RETURNED NONE === message event is None, skipping")
                 return
 
-            # ========== 明确打印 message_id 追踪 ==========
-            logger.info("=== PARSER SUCCESS === message_id=%s, chat_id=%s, open_id=%s, text=%s",
-                        message_event.message_id, message_event.chat_id, 
-                        message_event.open_id, message_event.text[:50] if message_event.text else "")
+            logger.info(
+                "=== PARSER SUCCESS === message_id=%s, chat_id=%s, open_id=%s, text=%s",
+                message_event.message_id,
+                message_event.chat_id,
+                message_event.open_id,
+                message_event.text[:50] if message_event.text else "",
+            )
 
             payload = {
                 "message_id": message_event.message_id,
@@ -98,9 +109,9 @@ class FeishuLongConnListener:
                 "open_id": message_event.open_id,
                 "text": message_event.text,
                 "create_time": message_event.create_time,
+                "source_message_payload": message_event.raw_payload,
             }
 
-            # ========== 幂等检查 ==========
             is_duplicate, existing_task_id, new_task_id = idempotency_service.check_and_create(
                 message_id=message_event.message_id,
                 raw_payload=payload
@@ -132,11 +143,12 @@ class FeishuLongConnListener:
             logger.info("=== CELERY ENQUEUE START === task_id=%s", new_task_id)
             from app.tasks.ingress_tasks import process_ingress_message
             task = process_ingress_message.delay(
-                new_task_id, 
-                message_event.text, 
+                new_task_id,
+                message_event.text,
                 message_event.open_id,
                 message_event.message_id,
-                message_event.chat_id
+                message_event.chat_id,
+                json.dumps(message_event.raw_payload or {}, ensure_ascii=False),
             )
 
             # ========== 更新任务状态为 queued ==========

@@ -1,3 +1,4 @@
+import json
 import time
 import logging
 import traceback
@@ -69,8 +70,15 @@ def build_action_executed_detail(fields: dict) -> str:
 
 
 @celery_app.task(bind=True, name="ingress.process_message")
-def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: str | None = None, 
-                           source_message_id: str = "", chat_id: str = ""):
+def process_ingress_message(
+    self,
+    task_id: str,
+    intent_text: str,
+    user_open_id: str | None = None,
+    source_message_id: str = "",
+    chat_id: str = "",
+    source_message_payload_json: str = "",
+):
     logger.info("=== CELERY TASK RECEIVED === task_id=%s, intent_text=%s, chat_id=%s", 
                 task_id, intent_text[:50] if intent_text else "", chat_id)
 
@@ -104,6 +112,31 @@ def process_ingress_message(self, task_id: str, intent_text: str, user_open_id: 
             "user_open_id": user_open_id or "",
             "raw_text": intent_text or "",
         }
+        if source_message_payload_json:
+            try:
+                payload = json.loads(source_message_payload_json)
+                if isinstance(payload, dict):
+                    initial_state["source_message_payload"] = payload
+                    message = payload.get("event", {}).get("message", {}) if isinstance(payload.get("event"), dict) else {}
+                    content = message.get("content") if isinstance(message, dict) else {}
+                    if isinstance(content, str):
+                        try:
+                            parsed = json.loads(content)
+                            content = parsed if isinstance(parsed, dict) else {}
+                        except Exception:
+                            content = {}
+                    logger.info(
+                        "=== SOURCE PAYLOAD RECEIVED === task_id=%s, message_id=%s, message_type=%s, content_keys=%s, has_image_key=%s, has_file_key=%s, text_preview=%s",
+                        task_id,
+                        source_message_id,
+                        message.get("message_type", "") if isinstance(message, dict) else "",
+                        sorted(list(content.keys())) if isinstance(content, dict) else [],
+                        bool(content.get("image_key")) if isinstance(content, dict) else False,
+                        bool(content.get("file_key")) if isinstance(content, dict) else False,
+                        str(content.get("text") or "")[:50] if isinstance(content, dict) else "",
+                    )
+            except Exception:
+                pass
         
         logger.info("=== LANGGRAPH EXECUTION START === task_id=%s, initial_state=%s", task_id, initial_state)
         result = lang_graph.invoke(initial_state)

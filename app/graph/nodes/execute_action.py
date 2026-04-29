@@ -36,6 +36,13 @@ from app.schemas.ocr_document import OCRDocumentInput, OCRDocumentOutput
 from app.services.llm.action_plan import run_llm_action_plan
 from app.services.llm.anomaly_explanation import run_llm_anomaly_explanation
 from app.services.llm.monitor_summary import run_llm_monitor_summary
+from app.services.feishu.file_attachment import (
+    build_ocr_input_from_downloaded_file,
+    download_feishu_file,
+    resolve_feishu_attachments,
+    select_single_supported_attachment,
+)
+from app.services.feishu.client import FeishuFileDownloadError
 from app.services.ocr.document_ocr import run_document_ocr
 from app.services.ocr.structured_extraction import run_document_extraction
 from app.utils.task_logger import log_step
@@ -108,6 +115,89 @@ def _build_ocr_input_from_state(state: dict, slots: dict) -> OCRDocumentInput:
         requested_by=requested_by or "feishu_user",
         hint_document_type=str(slots.get("hint_document_type") or "unknown").strip(),
     )
+
+
+def _build_ocr_input_with_feishu_attachment(state: dict, slots: dict) -> tuple[OCRDocumentInput | None, dict]:
+    if not settings.ENABLE_FEISHU_FILE_DOWNLOAD:
+        return _build_ocr_input_from_state(state, slots), {}
+
+    task_id = str(state.get("task_id") or "")
+    payload = state.get("source_message_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    if not payload:
+        log_step(task_id, "feishu_attachment_missing", "failed", "reason=no_supported_attachment_found")
+        return None, {
+            "status": "failed",
+            "error_message": "feishu_attachment_missing",
+            "result_summary": "我还没有收到可识别的图片或文件。请上传发票图片后再发送识别命令。",
+            "parsed_result": {"attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+        }
+    attachments = resolve_feishu_attachments(payload)
+    if not attachments:
+        log_step(task_id, "feishu_attachment_missing", "failed", "reason=no_supported_attachment_found")
+        return None, {
+            "status": "failed",
+            "error_message": "feishu_attachment_missing",
+            "result_summary": "我还没有收到可识别的图片或文件。请上传发票图片后再发送识别命令。",
+            "parsed_result": {"attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+        }
+
+    selected, reject_reason = select_single_supported_attachment(attachments)
+    if selected is None:
+        if reject_reason == "too_large":
+            log_step(task_id, "feishu_file_too_large", "failed", "reason=file_too_large")
+            return None, {
+                "status": "failed",
+                "error_message": "feishu_file_too_large",
+                "result_summary": "文件超过当前识别大小限制，请压缩或上传更清晰的小图。",
+                "parsed_result": {"attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+            }
+        log_step(task_id, "feishu_file_unsupported_type", "failed", f"reason={reject_reason or 'unsupported'}")
+        return None, {
+            "status": "failed",
+            "error_message": "feishu_file_unsupported_type",
+            "result_summary": "当前只支持图片文件，PDF/其他格式将在后续阶段支持。",
+            "parsed_result": {"attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+        }
+
+    log_step(task_id, "feishu_attachment_detected", "success", f"attachment_type={selected.attachment_type}, mime_type={selected.mime_type}, file_name={selected.file_name}, size_bytes={selected.size_bytes}")
+    log_step(task_id, "feishu_file_download_started", "processing", f"attachment_type={selected.attachment_type}")
+    try:
+        downloaded = download_feishu_file(selected, task_id=task_id)
+    except FeishuFileDownloadError as exc:
+        detail_parts = {
+            "error": "file_download_failed",
+            "reason": exc.reason,
+            "attachment_type": getattr(exc, "attachment_type", ""),
+            "message_id": getattr(exc, "message_id", ""),
+            "resource_type": getattr(exc, "resource_type", ""),
+            "endpoint_kind": getattr(exc, "endpoint_kind", ""),
+            "error_class": getattr(exc, "error_class", ""),
+            "error_message_safe": getattr(exc, "error_message_safe", ""),
+            "http_status": getattr(exc, "http_status", None),
+            "feishu_code": getattr(exc, "feishu_code", None),
+            "feishu_msg": getattr(exc, "feishu_msg", None),
+            "retryable": getattr(exc, "retryable", None),
+        }
+        log_step(task_id, "feishu_file_download_failed", "failed", ", ".join(f"{k}={v}" for k, v in detail_parts.items() if v not in (None, "")))
+        return None, {
+            "status": "failed",
+            "error_message": "feishu_file_download_failed",
+            "result_summary": "文件下载失败，请重新上传图片后再试。",
+            "parsed_result": {"attachment_type": selected.attachment_type, "attachment_mime_type": selected.mime_type, "attachment_size_bytes": selected.size_bytes, "attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+        }
+    except Exception:
+        log_step(task_id, "feishu_file_download_failed", "failed", "error=file_download_failed")
+        return None, {
+            "status": "failed",
+            "error_message": "feishu_file_download_failed",
+            "result_summary": "文件下载失败，请重新上传图片后再试。",
+            "parsed_result": {"attachment_type": selected.attachment_type, "attachment_mime_type": selected.mime_type, "attachment_size_bytes": selected.size_bytes, "attachment_downloaded": False, "file_source": "feishu", "formal_write": False},
+        }
+
+    log_step(task_id, "feishu_file_download_succeeded", "success", f"attachment_type={downloaded.attachment_type}, mime_type={downloaded.mime_type}, file_name={downloaded.file_name}, size_bytes={downloaded.file_size}, file_hash={downloaded.file_hash}, evidence_relative_path={downloaded.file_path}")
+    ocr_input = build_ocr_input_from_downloaded_file(downloaded, requested_by=str(slots.get("requested_by") or state.get("user_open_id") or "feishu_user").strip(), hint_document_type=str(slots.get("hint_document_type") or "unknown"))
+    return ocr_input, {"attachment_type": downloaded.attachment_type, "attachment_mime_type": downloaded.mime_type, "attachment_size_bytes": downloaded.file_size, "attachment_downloaded": True, "attachment_hash": downloaded.file_hash, "evidence_saved": True, "evidence_relative_path": downloaded.file_path, "file_source": "feishu", "formal_write": False}
 
 
 def _build_extraction_input_from_ocr(
@@ -1626,7 +1716,35 @@ def execute_action(state: dict) -> dict:
             state["client_profile"] = "b_service_client"
 
         elif intent_code == "document.structured_extract":
-            ocr_input = _build_ocr_input_from_state(state, slots)
+            feishu_detail = {}
+            payload_present = "source_message_payload" in state
+            if payload_present:
+                ocr_input, feishu_detail = _build_ocr_input_with_feishu_attachment(state, slots)
+            else:
+                ocr_input, feishu_detail = _build_ocr_input_from_state(state, slots), {}
+            if ocr_input is None:
+                state["platform"] = "ocr"
+                state["provider_id"] = "mock"
+                state["capability"] = "document.structured_extract"
+                state["readiness_status"] = "degraded"
+                state["endpoint_profile"] = "document_ocr_mock_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "document_extraction_service"
+                state["selected_backend"] = "document_extraction_service"
+                state["final_backend"] = "document_extraction_service"
+                state["backend_selection_reason"] = "feishu_attachment_validation_failed"
+                state["client_profile"] = "document_extraction_service"
+                state["response_mapper"] = "document_extraction_summary"
+                state["request_adapter"] = "ocr_document_input_schema+document_extraction_input_schema"
+                state["auth_profile"] = "none"
+                state["provider_profile"] = "rule"
+                state["credential_profile"] = "none"
+                state["status"] = feishu_detail.get("status", "failed")
+                state["error_message"] = str(feishu_detail.get("error_message") or "feishu_attachment_failed")
+                state["result_summary"] = str(feishu_detail.get("result_summary") or "文件处理失败，请稍后重试。")
+                state["parsed_result"] = feishu_detail.get("parsed_result", {})
+                state["action_executed_detail"] = state["parsed_result"]
+                return state
             log_step(
                 task_id,
                 "ocr_document_started",
@@ -1694,6 +1812,10 @@ def execute_action(state: dict) -> dict:
                     "error": str(ocr_result.error or "")[:200],
                     "formal_write": False,
                 }
+                if isinstance(feishu_detail, dict) and feishu_detail:
+                    state["parsed_result"].update(feishu_detail)
+                if isinstance(feishu_detail, dict) and feishu_detail.get("attachment_downloaded") is not None:
+                    state["parsed_result"]["attachment_downloaded"] = feishu_detail.get("attachment_downloaded")
                 state["action_executed_detail"] = state["parsed_result"]
                 return state
 
@@ -1751,6 +1873,10 @@ def execute_action(state: dict) -> dict:
                 "overall_confidence": round(float(extraction_result.overall_confidence or 0.0), 4),
                 "formal_write": False,
             }
+            if isinstance(feishu_detail, dict) and feishu_detail:
+                state["parsed_result"].update(feishu_detail)
+            if isinstance(feishu_detail, dict) and feishu_detail.get("attachment_downloaded") is not None:
+                state["parsed_result"]["attachment_downloaded"] = feishu_detail.get("attachment_downloaded")
             state["action_executed_detail"] = state["parsed_result"]
 
             if extraction_result.status == "succeeded":
@@ -1780,7 +1906,34 @@ def execute_action(state: dict) -> dict:
                 )
 
         elif intent_code == "document.ocr_recognize":
-            ocr_input = _build_ocr_input_from_state(state, slots)
+            payload_present = "source_message_payload" in state
+            if payload_present:
+                ocr_input, feishu_detail = _build_ocr_input_with_feishu_attachment(state, slots)
+            else:
+                ocr_input, feishu_detail = _build_ocr_input_from_state(state, slots), {}
+            if ocr_input is None:
+                state["platform"] = "ocr"
+                state["provider_id"] = "mock"
+                state["capability"] = "document.ocr_recognize"
+                state["readiness_status"] = "degraded"
+                state["endpoint_profile"] = "document_ocr_mock_v1"
+                state["session_injection_mode"] = "none"
+                state["execution_backend"] = "document_ocr_service"
+                state["selected_backend"] = "document_ocr_service"
+                state["final_backend"] = "document_ocr_service"
+                state["backend_selection_reason"] = "feishu_attachment_validation_failed"
+                state["client_profile"] = "document_ocr_service"
+                state["response_mapper"] = "document_ocr_summary"
+                state["request_adapter"] = "ocr_document_input_schema"
+                state["auth_profile"] = "none"
+                state["provider_profile"] = "mock"
+                state["credential_profile"] = "none"
+                state["status"] = feishu_detail.get("status", "failed")
+                state["error_message"] = str(feishu_detail.get("error_message") or "feishu_attachment_failed")
+                state["result_summary"] = str(feishu_detail.get("result_summary") or "文件处理失败，请稍后重试。")
+                state["parsed_result"] = feishu_detail.get("parsed_result", {})
+                state["action_executed_detail"] = state["parsed_result"]
+                return state
             log_step(
                 task_id,
                 "ocr_document_started",
@@ -1828,6 +1981,10 @@ def execute_action(state: dict) -> dict:
                 "fallback_reason": str(ocr_result.fallback_reason or "")[:80],
                 "error": str(ocr_result.error or "")[:200],
             }
+            if isinstance(feishu_detail, dict) and feishu_detail:
+                state["parsed_result"].update(feishu_detail)
+            if isinstance(feishu_detail, dict) and feishu_detail.get("attachment_downloaded") is not None:
+                state["parsed_result"]["attachment_downloaded"] = feishu_detail.get("attachment_downloaded")
             state["action_executed_detail"] = state["parsed_result"]
 
             if ocr_result.status == "succeeded":

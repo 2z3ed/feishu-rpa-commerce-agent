@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     OCR_PADDLE_LANG: str = "ch"
     OCR_PADDLE_USE_GPU: bool = False
     OCR_SAMPLE_FILE_PATH: str = "tests/fixtures/ocr/sample_invoice.png"
+    ENABLE_FEISHU_FILE_DOWNLOAD: bool = False
+    FEISHU_FILE_EVIDENCE_DIR: str = "data/ocr_evidence"
+    FEISHU_FILE_MAX_SIZE_MB: int = 10
+    FEISHU_FILE_ALLOWED_MIME_TYPES: str = "image/png,image/jpeg,application/pdf"
 
     # Feishu Bitable (multidimensional table) — one-way write, optional
     ENABLE_FEISHU_BITABLE_WRITE: bool = False
