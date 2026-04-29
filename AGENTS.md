@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P15-D：飞书文件入口接入
+P15-E：真实 OCR Provider 实机读取闭环
 
 本轮是 A 项目主导开发，B 项目原则上不改。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、任务编排层、飞书文件入口层、OCR 文件处理层、老板交互层。
+定位：飞书入口层、消息编排层、任务编排层、飞书文件入口层、OCR Provider 层、票据结构化处理层、老板交互层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：电商监控业务服务层，当前 P15-D 原则上不改 B。
+定位：电商监控业务服务层，当前 P15-E 原则上不改 B。
 
 P14 已完成并总收口：
 - P14-A：LLM 意图解析 fallback
@@ -686,9 +686,9 @@ P15-A 已完成并收口：
 P15-B 已完成并收口：
 - 支持 OCR_DOCUMENT_PROVIDER=mock / paddle / unsupported
 - 新增 PaddleOCR provider 封装
+- 支持 PaddleOCR 懒加载
 - 支持 provider_requested / provider_actual / fallback_reason 留痕
 - 支持 provider 不可用时降级 mock
-- 修复 longconn queued 覆盖已完成任务的状态一致性问题
 
 P15-C 已完成并收口：
 - 新增 document.structured_extract intent
@@ -699,70 +699,87 @@ P15-C 已完成并收口：
 - 支持 document_extraction_* steps 留痕
 - 飞书实机验收已通过
 
-当前 P15-D 只做：
+P15-D 已完成并提交：
+- 支持飞书 image / post / file 消息进入任务系统
+- 支持 image_key / file_key 稳定透传
+- 支持真实飞书 post 二维 content 结构解析
+- 支持飞书附件下载
+- 支持 evidence 保存
+- 支持真实飞书图片进入 OCR / structured extraction 链路
+- 实机验证真实图片入口链路通过
+- 注意：P15-D 打通的是“上传/下载/evidence 入口”，当时 OCR 结果仍然是 mock
 
-飞书文件入口接入。
+当前 P15-E 只做：
+
+真实 OCR Provider 实机读取闭环。
 
 固定原则：
 
-- 让 document.ocr_recognize / document.structured_extract 支持飞书图片或文件附件
-- 解析飞书消息里的 image/file 附件
-- 下载单张图片或单个文件
-- 保存到 evidence 目录
-- 构造 OCRDocumentInput
-- 复用 P15-A/B OCR service
-- 复用 P15-C structured extraction service
-- 记录附件检测、下载、失败、成功 steps
-- 无附件时给友好提示
-- 文件类型不支持时给友好提示
-- 文件过大时给友好提示
-- 不泄露 token / API key / 文件下载凭证
-- 不把真实文件或 evidence 加入 git
-- 不写正式业务结果
+- 基于 P15-D 的真实飞书图片入口继续做
+- 将 OCR_DOCUMENT_PROVIDER 从 mock 切到 paddle
+- OCR_PADDLE_ENABLED=true 时调用真实 PaddleOCR
+- 飞书下载后的 evidence 图片必须能进入 PaddleOCR provider
+- OCR 成功时 provider_actual=paddle
+- OCR 成功时 fallback_used=false
+- raw_text 必须来自真实图片，不再是 P15-A mock 固定文本
+- blocks_count 必须大于 0
+- confidence 必须有值
+- document.structured_extract 可以基于真实 OCR raw_text 继续执行
+- PaddleOCR 失败时必须有明确 fallback_reason
+- 不能悄悄 fallback mock 后假装真实 OCR 成功
+- 不做人工确认
+- 不做字段修改命令
+- 不写数据库正式结果
+- 不写飞书多维表
+- 不做自动报销 / 自动付款
+- 不做发票真伪校验
 - 不触发 RPA
+- 不提交真实 .env
+- 不提交真实票据 / evidence / 模型缓存 / venv
 
 本轮必须先读以下约束文件：
 
-1. docs/p15/p15d-project-plan.md
-2. docs/p15/P15D-agent-prompt.md
-3. docs/p15/p15d-boss-demo-sop.md
-4. docs/p15/p15d-acceptance-checklist.md
+1. docs/p15/p15e-project-plan.md
+2. docs/p15/P15E-agent-prompt.md
+3. docs/p15/p15e-boss-demo-sop.md
+4. docs/p15/p15e-acceptance-checklist.md
 
 如果以上文件不存在，先创建文档，不要直接开写业务代码。
 
 当前禁止：
 
-- 不做 P15-E 人工确认与字段修正闭环
-- 不做 P15-F 结构化结果写入与归档
-- 不做多文件批量处理
-- 不做 PDF 多页 OCR
-- 不做复杂文件预览
+- 不做 P15-F 人工确认与字段修正闭环
+- 不做 P15-G 结构化结果写入与归档
 - 不做字段人工修正
-- 不写数据库正式结果
+- 不写正式业务结果
 - 不写飞书多维表
 - 不做自动报销
 - 不做自动付款
 - 不做税务合规判断
 - 不做发票真伪校验
 - 不触发 RPA
+- 不做多文件批量 OCR
+- 不做多页 PDF OCR
 - 不改 B 项目
-- 不重构 P14-A/B/C/D
-- 不破坏 P15-A/B/C
-- 不把真实 .env、token、飞书下载文件、OCR evidence 加入 git
+- 不重构 P14
+- 不重构 P15-A/B/C/D
+- 不把真实 .env、真实票据、data/ocr_evidence、PaddleOCR 模型缓存、venv 加入 git
 
-P15-D 最小通过标准：
+P15-E 最小通过标准：
 
-- 能识别飞书消息中的单张图片或单个文件附件
-- 能提取 file_key / image_key / message_id 等必要元数据
-- 能调用飞书文件下载能力或 mock downloader
-- 能保存到 evidence 目录
-- 能构造 OCRDocumentInput
-- document.ocr_recognize 可使用下载后的 file_path
-- document.structured_extract 可使用下载后的 file_path
-- 无附件 / 下载失败 / 类型不支持 / 文件过大均有友好提示
-- task_steps 有 feishu_attachment_detected / feishu_file_download_started / succeeded / failed 等留痕
-- 不泄露 token / 真实敏感路径 / 大段文件内容
+- PaddleOCR 在当前 venv 可用，或明确完成安装并记录版本
+- OCR_DOCUMENT_PROVIDER=paddle 时进入真实 PaddleOCR provider
+- 飞书下载的 evidence 图片能被真实 OCR provider 读取
+- OCR 成功时 provider_actual=paddle
+- OCR 成功时 fallback_used=false
+- raw_text 不再是 P15-A 固定 mock 文本
+- raw_text 能包含上传样例图片里的部分关键文本
+- blocks_count > 0
+- confidence 有值
+- document.structured_extract 能基于真实 OCR raw_text 执行
+- task_steps 可追踪 provider=paddle / fallback_used=false
+- provider 失败时 fallback 可控，并记录 fallback_reason
 - 不写正式业务结果
 - 不触发 RPA
-- P15-A/B/C 回归不退化
+- P15-A/B/C/D 回归不退化
 - P14 回归不退化

@@ -86,6 +86,13 @@ def _build_ocr_step_detail(
         raw_text_length = len(str(ocr_output.raw_text or ""))
         blocks_count = len(ocr_output.blocks or [])
         needs_manual_review = bool(ocr_output.needs_manual_review)
+
+    image_source = str(ocr_input.source or "unknown").strip().lower()
+    file_path = str(ocr_input.file_path or "").strip()
+    evidence_relative_path = ""
+    if image_source == "feishu" and file_path and not file_path.startswith("mock://"):
+        evidence_relative_path = file_path
+
     detail = {
         "provider_requested": (settings.OCR_DOCUMENT_PROVIDER or "mock"),
         "provider_actual": provider or (settings.OCR_DOCUMENT_PROVIDER or "mock"),
@@ -98,6 +105,8 @@ def _build_ocr_step_detail(
         "raw_text_length": str(raw_text_length),
         "blocks_count": str(blocks_count),
         "needs_manual_review": "true" if needs_manual_review else "false",
+        "image_source": image_source,
+        "evidence_relative_path": evidence_relative_path,
     }
     if error:
         detail["error"] = error[:120]
