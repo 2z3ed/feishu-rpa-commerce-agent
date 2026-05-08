@@ -1,6 +1,9 @@
 .env
 data/rpa_evidence/
 data/ocr_evidence/
+data/hf_cache/
+data/ocr_samples/
+data/ocr_eval_runs/
 venv/
 __pycache__/
 *.pyc
