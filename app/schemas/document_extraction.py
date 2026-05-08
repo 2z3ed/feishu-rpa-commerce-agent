@@ -29,8 +29,12 @@ class DocumentExtractionOutput(BaseModel):
     fields: list[ExtractedField] = Field(default_factory=list)
     overall_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_fields: list[str] = Field(default_factory=list)
+    missing_reasons: dict[str, str] = Field(default_factory=dict)
     needs_manual_review: bool = True
     warnings: list[str] = Field(default_factory=list)
     fallback_used: bool = False
     error: str = ""
     extractor: str = Field(default="rule", min_length=1)
+    extraction_profile: str = Field(default="", min_length=0)
+    candidate_fields_count: int = Field(default=0, ge=0)
+    amount_candidates_count: int = Field(default=0, ge=0)

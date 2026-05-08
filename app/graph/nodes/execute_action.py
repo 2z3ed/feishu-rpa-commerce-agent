@@ -227,8 +227,11 @@ def _build_document_extraction_step_detail(result: DocumentExtractionOutput, *, 
     detail = {
         "document_type": str(result.document_type or "unknown"),
         "extractor": str(result.extractor or "rule"),
+        "extraction_profile": str(result.extraction_profile or ""),
         "fields_count": str(len(result.fields or [])),
         "missing_fields_count": str(len(result.missing_fields or [])),
+        "candidate_fields_count": str(int(result.candidate_fields_count or 0)),
+        "amount_candidates_count": str(int(result.amount_candidates_count or 0)),
         "overall_confidence": f"{float(result.overall_confidence or 0.0):.2f}",
         "needs_manual_review": "true" if bool(result.needs_manual_review) else "false",
         "fallback_used": "true" if bool(result.fallback_used) else "false",
@@ -1840,7 +1843,7 @@ def execute_action(state: dict) -> dict:
                 task_id,
                 "document_extraction_started",
                 "processing",
-                "extractor=rule",
+                "extractor=rule_v2",
             )
 
             state["platform"] = "ocr"
@@ -1877,8 +1880,11 @@ def execute_action(state: dict) -> dict:
                 "fallback_reason": str(ocr_result.fallback_reason or "")[:80],
                 "error": str(extraction_result.error or "")[:200],
                 "extractor": str(extraction_result.extractor or "rule"),
+                "extraction_profile": str(extraction_result.extraction_profile or ""),
                 "fields_count": len(extraction_result.fields or []),
                 "missing_fields_count": len(extraction_result.missing_fields or []),
+                "candidate_fields_count": int(extraction_result.candidate_fields_count or 0),
+                "amount_candidates_count": int(extraction_result.amount_candidates_count or 0),
                 "overall_confidence": round(float(extraction_result.overall_confidence or 0.0), 4),
                 "formal_write": False,
             }
@@ -4129,7 +4135,16 @@ def format_document_extraction_result(result: DocumentExtractionOutput) -> str:
     lines.append("缺失字段：")
     if result.missing_fields:
         for name in result.missing_fields:
-            lines.append(f"- {name}")
+            reason = str((result.missing_reasons or {}).get(name) or "").strip()
+            lines.append(f"- {name}：{reason}" if reason else f"- {name}")
+    else:
+        lines.append("- 无")
+
+    lines.append("")
+    lines.append("缺失原因：")
+    if result.missing_reasons:
+        for name, reason in result.missing_reasons.items():
+            lines.append(f"- {name}：{reason}")
     else:
         lines.append("- 无")
 

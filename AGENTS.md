@@ -658,15 +658,15 @@ agent 本轮不允许：
 
 当前唯一主线为：
 
-P15-E：真实 OCR Provider 实机读取闭环
+P15-F2：20 张发票 OCR / 字段抽取小样本评测基线
 
-本轮是 A 项目主导开发，B 项目原则上不改。
+本轮是 A 项目主导开发，B 项目不改。
 
 A 项目：feishu-rpa-commerce-agent  
-定位：飞书入口层、消息编排层、任务编排层、飞书文件入口层、OCR Provider 层、票据结构化处理层、老板交互层。
+定位：飞书入口层、消息编排层、任务编排层、OCR Provider 层、票据字段抽取层、批量评测脚本层。
 
 B 项目：Ecom-Watch-Agent-Agent  
-定位：电商监控业务服务层，当前 P15-E 原则上不改 B。
+定位：电商监控业务服务层，当前 P15-F2 不改 B。
 
 P14 已完成并总收口：
 - P14-A：LLM 意图解析 fallback
@@ -676,81 +676,83 @@ P14 已完成并总收口：
 - P14-Z：P14 LLM 智能增强层总收口文档
 
 P15-A 已完成并收口：
-- 新增 document.ocr_recognize intent
-- 新增 OCR 输入 / 输出 schema
-- 新增 mock OCR provider
-- 新增 OCR service 统一入口
-- 支持 ocr_document_* steps 留痕
-- 飞书 / API mock OCR 验收已通过
+- OCR mock 骨架
+- document.ocr_recognize
+- OCR schema
+- mock OCR provider
+- ocr_document_* steps 留痕
 
 P15-B 已完成并收口：
-- 支持 OCR_DOCUMENT_PROVIDER=mock / paddle / unsupported
-- 新增 PaddleOCR provider 封装
-- 支持 PaddleOCR 懒加载
-- 支持 provider_requested / provider_actual / fallback_reason 留痕
-- 支持 provider 不可用时降级 mock
+- OCR provider routing
+- PaddleOCR provider 懒加载
+- provider fallback
+- provider_requested / provider_actual / fallback_reason 留痕
 
 P15-C 已完成并收口：
-- 新增 document.structured_extract intent
-- 新增结构化提取 schema
-- 新增 rule extractor service
-- 支持 invoice / receipt 最小字段提取
-- 支持 fields / overall_confidence / missing_fields / needs_manual_review
-- 支持 document_extraction_* steps 留痕
-- 飞书实机验收已通过
+- document.structured_extract
+- rule extractor
+- invoice / receipt 最小字段提取
+- document_extraction_* steps 留痕
 
 P15-D 已完成并提交：
-- 支持飞书 image / post / file 消息进入任务系统
-- 支持 image_key / file_key 稳定透传
-- 支持真实飞书 post 二维 content 结构解析
-- 支持飞书附件下载
-- 支持 evidence 保存
-- 支持真实飞书图片进入 OCR / structured extraction 链路
-- 实机验证真实图片入口链路通过
-- 注意：P15-D 打通的是“上传/下载/evidence 入口”，当时 OCR 结果仍然是 mock
+- 飞书真实图片 / 文件入口
+- image/post/file 消息进入任务系统
+- image_key / file_key 透传
+- 附件解析
+- 飞书文件下载
+- evidence 保存
 
-当前 P15-E 只做：
+P15-E 已完成并收口：
+- PaddleOCR 真实 Provider 实机读取闭环
+- 飞书真实图片可下载并保存 evidence
+- provider_actual=paddle
+- fallback_used=false
+- raw_text 来自真实图片
+- blocks_count / confidence 有效
 
-真实 OCR Provider 实机读取闭环。
+P15-F 已完成并收口：
+- 真实 OCR raw_text 下的字段抽取增强
+- 新增 / 增强 rule_v2
+- 支持发票号码、开票日期、购买方、销售方、价税合计等字段提取
+- 支持 missing_fields / missing_reasons / needs_review / warning
+- 飞书实机验收通过
+
+当前 P15-F2 只做：
+
+20 张发票 OCR / 字段抽取小样本评测基线。
 
 固定原则：
 
-- 基于 P15-D 的真实飞书图片入口继续做
-- 将 OCR_DOCUMENT_PROVIDER 从 mock 切到 paddle
-- OCR_PADDLE_ENABLED=true 时调用真实 PaddleOCR
-- 飞书下载后的 evidence 图片必须能进入 PaddleOCR provider
-- OCR 成功时 provider_actual=paddle
-- OCR 成功时 fallback_used=false
-- raw_text 必须来自真实图片，不再是 P15-A mock 固定文本
-- blocks_count 必须大于 0
-- confidence 必须有值
-- document.structured_extract 可以基于真实 OCR raw_text 继续执行
-- PaddleOCR 失败时必须有明确 fallback_reason
-- 不能悄悄 fallback mock 后假装真实 OCR 成功
-- 不做人工确认
-- 不做字段修改命令
-- 不写数据库正式结果
-- 不写飞书多维表
-- 不做自动报销 / 自动付款
-- 不做发票真伪校验
-- 不触发 RPA
-- 不提交真实 .env
-- 不提交真实票据 / evidence / 模型缓存 / venv
+- 本轮不做飞书交互
+- 本轮不做人审确认闭环
+- 本轮不做字段修改命令
+- 本轮不写正式业务结果
+- 本轮不写飞书多维表
+- 本轮不触发 RPA
+- 本轮只做本地脚本评测
+- 先下载 20 张中文发票图片样本
+- 批量跑 PaddleOCR + rule_v2 字段抽取
+- 输出可人工核对的 CSV / JSON 报告
+- 没有 labels.csv 时，不宣称准确率
+- 只输出无标注质量指标：OCR 成功率、fallback 率、字段非空率、missing_fields 分布、needs_review 比例
+- 样本图片、HF cache、OCR eval runs、evidence 不允许进 git
+- 不提交真实发票图片
+- 不提交完整 OCR 原文大文件
 
 本轮必须先读以下约束文件：
 
-1. docs/p15/p15e-project-plan.md
-2. docs/p15/P15E-agent-prompt.md
-3. docs/p15/p15e-boss-demo-sop.md
-4. docs/p15/p15e-acceptance-checklist.md
+1. docs/p15/p15f2-project-plan.md
+2. docs/p15/P15F2-agent-prompt.md
+3. docs/p15/p15f2-boss-demo-sop.md
+4. docs/p15/p15f2-acceptance-checklist.md
 
 如果以上文件不存在，先创建文档，不要直接开写业务代码。
 
 当前禁止：
 
-- 不做 P15-F 人工确认与字段修正闭环
-- 不做 P15-G 结构化结果写入与归档
-- 不做字段人工修正
+- 不做 P15-G 人工确认与字段修正闭环
+- 不做 P15-H 结构化结果写入与归档
+- 不做飞书交互验收
 - 不写正式业务结果
 - 不写飞书多维表
 - 不做自动报销
@@ -758,28 +760,25 @@ P15-D 已完成并提交：
 - 不做税务合规判断
 - 不做发票真伪校验
 - 不触发 RPA
-- 不做多文件批量 OCR
-- 不做多页 PDF OCR
 - 不改 B 项目
-- 不重构 P14
-- 不重构 P15-A/B/C/D
-- 不把真实 .env、真实票据、data/ocr_evidence、PaddleOCR 模型缓存、venv 加入 git
+- 不重构 P15-D/E/F
+- 不把 data/hf_cache、data/ocr_samples、data/ocr_eval_runs、data/ocr_evidence 加入 git
+- 不把真实发票图片、完整 OCR 明细原文、PaddleOCR 模型缓存、venv 加入 git
 
-P15-E 最小通过标准：
+P15-F2 最小通过标准：
 
-- PaddleOCR 在当前 venv 可用，或明确完成安装并记录版本
-- OCR_DOCUMENT_PROVIDER=paddle 时进入真实 PaddleOCR provider
-- 飞书下载的 evidence 图片能被真实 OCR provider 读取
-- OCR 成功时 provider_actual=paddle
-- OCR 成功时 fallback_used=false
-- raw_text 不再是 P15-A 固定 mock 文本
-- raw_text 能包含上传样例图片里的部分关键文本
-- blocks_count > 0
-- confidence 有值
-- document.structured_extract 能基于真实 OCR raw_text 执行
-- task_steps 可追踪 provider=paddle / fallback_used=false
-- provider 失败时 fallback 可控，并记录 fallback_reason
-- 不写正式业务结果
-- 不触发 RPA
-- P15-A/B/C/D 回归不退化
+- 新增 20 张样本下载脚本，支持 dry-run
+- 可从 Hugging Face 数据集随机抽样中文发票图片
+- 默认 limit=20
+- 生成 manifest.csv
+- 新增批量评测脚本
+- 能批量跑当前 OCR + structured extraction
+- 能输出 summary.json
+- 能输出 details.csv
+- 能输出 failed_cases.json
+- 无 labels.csv 时，只输出质量指标，不宣称准确率
+- details.csv 适合人工后续核对
+- .gitignore 覆盖 hf_cache / ocr_samples / ocr_eval_runs / ocr_evidence
+- 样本图片和评测输出不进入 git
+- P15-A/B/C/D/E/F 回归不退化
 - P14 回归不退化
